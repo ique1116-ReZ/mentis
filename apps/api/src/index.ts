@@ -186,7 +186,7 @@ export function createPlatformDemo(): PlatformDemo {
         specialties: ["knee", "running"],
       },
     ],
-    demoCredentials: [{ username: "zhang", password: "mentis2026", userId: "user_1" }],
+    demoCredentials: getDemoCredentials(),
     userMemories: {
       user_1: {
         userId: "user_1",
@@ -197,6 +197,17 @@ export function createPlatformDemo(): PlatformDemo {
       },
     },
   };
+}
+
+function getDemoCredentials(): DemoCredential[] {
+  const username = process.env.MENTIS_DEMO_USERNAME?.trim();
+  const password = process.env.MENTIS_DEMO_PASSWORD?.trim();
+
+  if (!username || !password) {
+    return [];
+  }
+
+  return [{ username, password, userId: "user_1" }];
 }
 
 export function authenticateDemoUser(platform: PlatformDemo, input: LoginInput): AuthenticatedSession {
