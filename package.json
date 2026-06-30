@@ -1,0 +1,25 @@
+{
+  "name": "mentis-rehab-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "B2C sports rehabilitation AI agent platform with clinician collaboration and future organization workspace.",
+  "workspaces": [
+    "packages/domain",
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "build": "npm run build -w @mentis/domain && npm run build -w @mentis/api && npm run build -w @mentis/web",
+    "test": "npm run test -w @mentis/domain && npm run test -w @mentis/api && npm run test:py",
+    "test:js": "npm run test -w @mentis/domain && npm run test -w @mentis/api",
+    "test:py": "PYTHONPATH=apps/ai-service python3 -m unittest discover -s apps/ai-service/tests -p 'test_*.py'",
+    "dev:web": "npm run dev -w @mentis/web",
+    "dev:api": "npm run dev -w @mentis/api"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0",
+    "vitest": "^3.2.0"
+  }
+}

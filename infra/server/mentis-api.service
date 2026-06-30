@@ -1,0 +1,18 @@
+[Unit]
+Description=Mentis Rehab API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/mentis-rehab-platform/current
+Environment=NODE_ENV=production
+Environment=PORT=3001
+Environment=WEB_ORIGINS=https://aimentis.site,https://www.aimentis.site
+ExecStart=/usr/bin/node apps/api/dist/server.js
+Restart=always
+RestartSec=5
+User=mentis
+Group=mentis
+
+[Install]
+WantedBy=multi-user.target

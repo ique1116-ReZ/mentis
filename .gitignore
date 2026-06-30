@@ -1,0 +1,14 @@
+.superpowers/
+node_modules/
+.npm-cache/
+.pnpm-cache/
+.pnpm-home/
+dist/
+coverage/
+.vite/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+.env
+.env.local
