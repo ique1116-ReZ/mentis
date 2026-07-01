@@ -3,18 +3,20 @@
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     "PingFang SC", "Microsoft YaHei", sans-serif;
   color: #241f1a;
-  background: #fbf5ec;
-  --paper: rgba(255, 252, 246, 0.92);
-  --paper-soft: #fff7e8;
-  --ink: #241f1a;
-  --muted: #7a7066;
-  --line: rgba(36, 31, 26, 0.14);
-  --line-strong: #241f1a;
-  --orange: #efa23d;
-  --green: #7d9d38;
-  --green-soft: #eef5db;
-  --sand: #f6ead8;
-  --shadow: 0 18px 48px rgba(79, 56, 28, 0.08);
+  background: #f7f3ea;
+  --paper: rgba(255, 253, 247, 0.94);
+  --paper-soft: #fbf6eb;
+  --ink: #24201c;
+  --muted: #827a70;
+  --line: rgba(36, 31, 26, 0.13);
+  --line-strong: #2a2520;
+  --orange: #d97757;
+  --orange-strong: #bd5f42;
+  --green: #6f7d54;
+  --green-soft: #eef1e5;
+  --sand: #eee5d8;
+  --shadow: 0 18px 60px rgba(45, 34, 24, 0.08);
+  --mono: "SFMono-Regular", "Menlo", "Consolas", monospace;
 }
 
 * {
@@ -33,9 +35,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   overflow-x: hidden;
-  background:
-    radial-gradient(circle at 8% 95%, rgba(239, 162, 61, 0.2), transparent 28%),
-    linear-gradient(180deg, #fff8ec 0%, #fbf5ec 48%, #f8eee3 100%);
+  background: linear-gradient(180deg, #fbf8f1 0%, #f6f1e7 100%);
 }
 
 button,
@@ -56,9 +56,9 @@ svg {
 }
 
 .app-page {
-  width: min(1510px, calc(100% - 36px));
+  width: min(1510px, calc(100% - 42px));
   margin: 0 auto;
-  padding: 18px 0 24px;
+  padding: 22px 0 26px;
 }
 
 .login-page {
@@ -68,10 +68,7 @@ svg {
   min-height: 100vh;
   padding: 24px;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 50% 50%, rgba(249, 115, 22, 0.18), transparent 34%),
-    radial-gradient(circle at 15% 12%, rgba(249, 115, 22, 0.12), transparent 24%),
-    linear-gradient(180deg, #050505 0%, #101010 54%, #050505 100%);
+  background: #f7f3ea;
 }
 
 .login-antigravity {
@@ -95,21 +92,21 @@ svg {
   position: relative;
   z-index: 1;
   display: grid;
-  gap: 22px;
-  width: min(430px, 100%);
+  gap: 20px;
+  width: min(460px, 100%);
+  max-height: calc(100vh - 48px);
   padding: 30px;
-  border: 1px solid rgba(249, 115, 22, 0.24);
-  border-radius: 18px;
-  color: #fff7ed;
-  background: rgba(8, 8, 8, 0.72);
-  box-shadow:
-    0 26px 90px rgba(0, 0, 0, 0.48),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(22px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: rgba(255, 253, 247, 0.96);
+  box-shadow: 0 30px 80px rgba(45, 34, 24, 0.12);
+  backdrop-filter: blur(18px);
 }
 
 .login-shell .brand-mark {
-  border-color: rgba(249, 115, 22, 0.36);
+  border-color: rgba(36, 31, 26, 0.2);
 }
 
 .login-brand,
@@ -135,7 +132,7 @@ svg {
 .login-brand span,
 .login-copy p,
 .login-form label {
-  color: rgba(255, 237, 213, 0.68);
+  color: var(--muted);
 }
 
 .login-copy h1 {
@@ -152,24 +149,24 @@ svg {
 .role-switch {
   gap: 8px;
   padding: 5px;
-  border: 1px solid rgba(249, 115, 22, 0.22);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f2eadf;
 }
 
 .role-switch button {
   flex: 1;
   min-height: 38px;
   border: 0;
-  border-radius: 8px;
-  color: rgba(255, 237, 213, 0.62);
+  border-radius: 6px;
+  color: var(--muted);
   background: transparent;
 }
 
 .role-switch button.active {
-  color: #fff7ed;
-  background: rgba(249, 115, 22, 0.2);
-  box-shadow: 0 10px 30px rgba(249, 115, 22, 0.14);
+  color: var(--ink);
+  background: #fffdf7;
+  box-shadow: 0 8px 22px rgba(45, 34, 24, 0.08);
 }
 
 .role-switch button:disabled {
@@ -192,32 +189,38 @@ svg {
 .login-form input {
   min-height: 46px;
   padding: 0 13px;
-  border: 1px solid rgba(249, 115, 22, 0.28);
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
   outline: 0;
-  color: #fff7ed;
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink);
+  background: #fffdf7;
 }
 
 .login-form input:focus {
-  border-color: rgba(239, 162, 61, 0.82);
-  box-shadow: 0 0 0 3px rgba(239, 162, 61, 0.16);
+  border-color: rgba(217, 119, 87, 0.82);
+  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.14);
 }
 
 .login-error {
   margin: 0;
-  color: #fdba74;
+  color: var(--orange-strong);
   font-size: 13px;
 }
 
 .login-submit {
   min-height: 48px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 7px;
   color: white;
-  background: #f97316;
+  background: var(--orange);
   font-weight: 800;
-  box-shadow: 0 14px 34px rgba(249, 115, 22, 0.28);
+  box-shadow: 0 14px 34px rgba(189, 95, 66, 0.24);
+}
+
+.form-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .login-submit:disabled {
@@ -247,7 +250,7 @@ svg {
   justify-content: space-between;
   gap: 18px;
   min-height: 56px;
-  margin-bottom: 18px;
+  margin-bottom: 20px;
 }
 
 .brand {
@@ -260,7 +263,7 @@ svg {
   width: 42px;
   height: 42px;
   border: 1px solid rgba(36, 31, 26, 0.18);
-  border-radius: 12px;
+  border-radius: 8px;
   background: #111;
   overflow: hidden;
 }
@@ -284,7 +287,9 @@ svg {
 }
 
 .brand strong {
+  font-family: Georgia, "Times New Roman", serif;
   font-size: 20px;
+  letter-spacing: 0;
 }
 
 .brand span,
@@ -301,11 +306,12 @@ svg {
   align-self: stretch;
   min-width: 0;
   max-width: 100%;
-  gap: 28px;
-  padding: 0 34px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.5);
-  box-shadow: 0 12px 30px rgba(74, 52, 26, 0.06);
+  gap: 24px;
+  padding: 0 28px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 253, 247, 0.72);
+  box-shadow: none;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -325,6 +331,8 @@ svg {
   border: 0;
   background: transparent;
   color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
   line-height: 1;
   white-space: nowrap;
 }
@@ -372,7 +380,7 @@ svg {
   height: 17px;
   border-radius: 50%;
   color: white;
-  background: #ee8f3d;
+  background: var(--orange);
   font-size: 11px;
 }
 
@@ -384,9 +392,9 @@ svg {
   min-height: 30px;
   padding: 0 10px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  color: #6f5a2e;
-  background: #fff7e9;
+  border-radius: 7px;
+  color: var(--orange-strong);
+  background: #fffdf7;
 }
 
 .avatar {
@@ -402,7 +410,7 @@ svg {
 }
 
 .photo {
-  background: linear-gradient(135deg, #3a322b, #b98157);
+  background: #3a322b;
 }
 
 .layout-grid {
@@ -422,7 +430,7 @@ svg {
 .panel,
 .chat-workspace {
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 8px;
   background: var(--paper);
   box-shadow: var(--shadow);
 }
@@ -440,15 +448,16 @@ svg {
 .panel-header h2 {
   margin: 0;
   font-size: 16px;
+  letter-spacing: 0;
 }
 
 .panel-header button {
   min-height: 30px;
   padding: 0 10px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  color: #6f5a2e;
-  background: #fff7e9;
+  border-radius: 7px;
+  color: var(--orange-strong);
+  background: #fffdf7;
 }
 
 .case-card {
@@ -456,7 +465,7 @@ svg {
   min-height: 98px;
   padding: 16px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   background: #fffdf8;
   overflow: hidden;
 }
@@ -474,9 +483,9 @@ svg {
   width: fit-content;
   margin-bottom: 8px;
   padding: 5px 8px;
-  border-radius: 7px;
-  color: #6f5a2e;
-  background: #fff3d9;
+  border-radius: 6px;
+  color: var(--orange-strong);
+  background: rgba(217, 119, 87, 0.12);
   font-size: 12px;
   font-weight: 800;
 }
@@ -485,8 +494,8 @@ svg {
   display: grid;
   gap: 6px;
   padding: 16px;
-  border: 1px dashed #dfcab0;
-  border-radius: 10px;
+  border: 1px dashed rgba(36, 31, 26, 0.2);
+  border-radius: 8px;
   background: #fffdf8;
 }
 
@@ -516,15 +525,15 @@ svg {
   min-height: 62px;
   padding: 10px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   color: var(--ink);
   text-align: left;
   background: #fffdf8;
 }
 
 .case-list-item.active {
-  border-color: rgba(239, 162, 61, 0.8);
-  background: #fff4df;
+  border-color: rgba(217, 119, 87, 0.72);
+  background: rgba(217, 119, 87, 0.1);
 }
 
 .case-list-item > span {
@@ -534,7 +543,7 @@ svg {
   width: 36px;
   height: 36px;
   border: 1.5px solid var(--line-strong);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--orange);
   font-weight: 900;
 }
@@ -558,25 +567,6 @@ svg {
 .case-list-item small {
   margin-top: 3px;
   color: var(--muted);
-}
-
-.runner-doodle {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  width: 62px;
-  height: 62px;
-  color: var(--ink);
-}
-
-.fill-orange {
-  fill: var(--orange);
-  stroke-width: 0;
-}
-
-.fill-green {
-  fill: var(--green);
-  stroke-width: 0;
 }
 
 .stage-summary > div:first-child {
@@ -674,9 +664,9 @@ svg {
   min-height: 34px;
   padding: 0 12px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  color: #6f5a2e;
-  background: #fff7e9;
+  border-radius: 7px;
+  color: var(--orange-strong);
+  background: #fffdf7;
   white-space: nowrap;
 }
 
@@ -693,14 +683,16 @@ svg {
 }
 
 .category-copy span {
-  color: #6f5a2e;
+  color: var(--orange-strong);
   font-weight: 800;
   font-size: 13px;
+  font-family: var(--mono);
 }
 
 .category-copy h2 {
   margin: 8px 0 8px;
-  font-size: 28px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 34px;
   line-height: 1.18;
 }
 
@@ -724,15 +716,15 @@ svg {
   min-height: 106px;
   padding: 16px;
   border: 1px solid #ead8bd;
-  border-radius: 10px;
+  border-radius: 8px;
   color: var(--ink);
   text-align: left;
-  background: #fff8ed;
+  background: #fffdf7;
 }
 
 .category-card:hover {
-  border-color: rgba(239, 162, 61, 0.74);
-  background: #fff4df;
+  border-color: rgba(217, 119, 87, 0.7);
+  background: rgba(217, 119, 87, 0.08);
 }
 
 .category-mark {
@@ -742,7 +734,7 @@ svg {
   width: 48px;
   height: 48px;
   border: 2px solid var(--line-strong);
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--orange);
   font-weight: 900;
 }
@@ -777,15 +769,15 @@ svg {
 .message-content {
   max-width: min(560px, 74%);
   padding: 18px 20px;
-  border: 1px solid #ead8bd;
-  border-radius: 16px;
-  background: #fff8ed;
+  border: 1px solid rgba(36, 31, 26, 0.13);
+  border-radius: 8px;
+  background: #fffdf7;
   line-height: 1.72;
 }
 
 .message.user .message-content {
   order: 1;
-  background: #f4f3df;
+  background: #f0eadf;
 }
 
 .message.user .avatar {
@@ -800,20 +792,99 @@ svg {
   margin-bottom: 0;
 }
 
+.message-question {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(36, 31, 26, 0.12);
+  font-weight: 800;
+}
+
+.message-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.message-option {
+  min-height: 34px;
+  min-width: 72px;
+  padding: 0 13px;
+  border: 1px solid rgba(217, 119, 87, 0.42);
+  border-radius: 7px;
+  color: var(--orange-strong);
+  background: rgba(217, 119, 87, 0.1);
+  font-weight: 800;
+}
+
+.message-option:hover:not(:disabled) {
+  border-color: var(--orange-strong);
+  background: rgba(217, 119, 87, 0.16);
+}
+
+.message-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.typing-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 84px;
+  min-height: 46px;
+}
+
+.typing-content span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--orange);
+  opacity: 0.35;
+  animation: typing-pulse 1.2s ease-in-out infinite;
+}
+
+.typing-content span:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.typing-content span:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes typing-pulse {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+
+  40% {
+    transform: translateY(-4px);
+    opacity: 0.95;
+  }
+}
+
 .message time {
   align-self: flex-end;
   color: var(--muted);
   font-size: 12px;
 }
 
-.basket {
-  width: 58px;
-  height: 58px;
+.ai-avatar {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
   flex: 0 0 auto;
 }
 
-.basket path {
-  stroke-width: 3.6;
+.ai-avatar img {
+  display: block;
+  width: 38px;
+  height: 30px;
+  object-fit: contain;
 }
 
 .citation-actions {
@@ -829,8 +900,8 @@ svg {
   padding: 0 12px;
   border: 1px solid #ebd1aa;
   border-radius: 7px;
-  color: #b16716;
-  background: #fff7e8;
+  color: var(--orange-strong);
+  background: #fffdf7;
 }
 
 .quick-actions {
@@ -846,8 +917,8 @@ svg {
   margin: 0 auto;
   min-height: 58px;
   padding: 8px 10px 8px 18px;
-  border: 1.5px solid rgba(36, 31, 26, 0.45);
-  border-radius: 17px;
+  border: 1px solid rgba(36, 31, 26, 0.28);
+  border-radius: 8px;
   background: #fffdf8;
 }
 
@@ -865,13 +936,13 @@ svg {
   width: 36px;
   height: 36px;
   border: 1px solid var(--line);
-  border-radius: 50%;
+  border-radius: 8px;
   background: #fffaf1;
 }
 
 .chat-composer .send {
   color: white;
-  background: var(--green);
+  background: var(--orange);
 }
 
 .chat-disclaimer {
@@ -884,9 +955,9 @@ svg {
 .today-plan {
   position: relative;
   padding: 16px;
-  border: 1px solid #f0dcc2;
-  border-radius: 12px;
-  background: #fff7e8;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffdf7;
 }
 
 .pending-recommendation {
@@ -896,16 +967,16 @@ svg {
   align-content: center;
   padding: 18px;
   border: 1px dashed #dfcab0;
-  border-radius: 12px;
+  border-radius: 8px;
   background: rgba(255, 253, 248, 0.62);
 }
 
 .pending-recommendation span {
   width: fit-content;
   padding: 5px 8px;
-  border-radius: 7px;
-  color: #b16716;
-  background: #fff3d9;
+  border-radius: 6px;
+  color: var(--orange-strong);
+  background: rgba(217, 119, 87, 0.12);
   font-size: 12px;
   font-weight: 800;
 }
@@ -944,7 +1015,7 @@ svg {
   grid-template-columns: 30px 1fr;
   gap: 12px;
   padding: 13px 0;
-  border-top: 1px dashed #dfcab0;
+  border-top: 1px dashed rgba(36, 31, 26, 0.16);
 }
 
 .plan-list li:first-child {
@@ -957,7 +1028,7 @@ svg {
   width: 28px;
   height: 28px;
   border: 1px solid #dac9b2;
-  border-radius: 50%;
+  border-radius: 7px;
   background: #fffdf8;
   font-weight: 800;
 }
@@ -977,14 +1048,6 @@ svg {
   color: var(--muted);
 }
 
-.carrot-doodle {
-  position: absolute;
-  right: 18px;
-  bottom: 8px;
-  width: 54px;
-  height: 54px;
-}
-
 .support-copy {
   margin: 0 0 16px;
 }
@@ -992,8 +1055,9 @@ svg {
 .clinician-card {
   gap: 12px;
   padding: 14px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.52);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 253, 247, 0.64);
 }
 
 .clinician-card div {
@@ -1008,7 +1072,7 @@ svg {
 
 .clinician-card em {
   padding: 8px 12px;
-  border-radius: 999px;
+  border-radius: 7px;
   color: #5f7d2e;
   background: var(--green-soft);
   font-style: normal;
@@ -1023,14 +1087,14 @@ svg {
   flex: 1;
   min-height: 42px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 7px;
   background: #fffdf8;
 }
 
 .support-actions .green-button {
   border: 0;
   color: white;
-  background: var(--green);
+  background: var(--orange);
 }
 
 .emergency {

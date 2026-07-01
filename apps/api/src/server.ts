@@ -4,6 +4,7 @@ import {
   chatWithQwen,
   createPlatformDemo,
   getUserMemory,
+  registerDemoUser,
   rememberCase,
   resolveCorsOrigin,
   runAssessmentWorkflow,
@@ -11,6 +12,7 @@ import {
   type ChatMessage,
   type LoginInput,
   type MemoryCaseSummary,
+  type RegistrationInput,
   type RehabConsultCategory,
 } from "./index.js";
 
@@ -40,6 +42,13 @@ const server = createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/v1/auth/login") {
       const body = await readJson(request);
       const result = authenticateDemoUser(platform, body as unknown as LoginInput);
+      response.end(JSON.stringify(result));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/auth/register") {
+      const body = await readJson(request);
+      const result = registerDemoUser(platform, body as unknown as RegistrationInput);
       response.end(JSON.stringify(result));
       return;
     }

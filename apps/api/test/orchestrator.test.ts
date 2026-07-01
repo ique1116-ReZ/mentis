@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  authenticateDemoUser,
+  buildChatSystemPrompt,
+  buildGuidedChatResponse,
   chatWithQwen,
   createPlatformDemo,
+  registerDemoUser,
   runAssessmentWorkflow,
   QwenChatClient,
   resolveCorsOrigin,
@@ -54,7 +58,106 @@ describe("business API orchestration", () => {
   });
 });
 
+describe("auth and registration", () => {
+  it("only allows ique1116 to register with profile data", () => {
+    const platform = createPlatformDemo();
+
+    const session = registerDemoUser(platform, {
+      username: "ique1116",
+      password: "secret",
+      displayName: "ReZ",
+      heightCm: "175",
+      weightKg: "68",
+      sportLevel: "中级跑者",
+      weeklyFrequency: "4-5 次",
+      primaryGoal: "安全恢复跑步",
+    });
+
+    expect(session.user.id).toBe("user_ique1116");
+    expect(session.user.displayName).toBe("ReZ");
+    expect(session.user.profile).toMatchObject({
+      heightCm: "175",
+      weightKg: "68",
+      sportLevel: "中级跑者",
+      weeklyFrequency: "4-5 次",
+      primaryGoal: "安全恢复跑步",
+    });
+    expect(session.memory.notes).toContain("中级跑者，每周训练 4-5 次，目标是安全恢复跑步。");
+
+    const loginSession = authenticateDemoUser(platform, { username: "ique1116", password: "secret" });
+    expect(loginSession.user.id).toBe("user_ique1116");
+  });
+
+  it("rejects registration for non-allowlisted usernames", () => {
+    const platform = createPlatformDemo();
+
+    expect(() =>
+      registerDemoUser(platform, {
+        username: "someone_else",
+        password: "secret",
+        displayName: "Other",
+        heightCm: "180",
+        weightKg: "72",
+        sportLevel: "初级",
+        weeklyFrequency: "2 次",
+        primaryGoal: "恢复训练",
+      }),
+    ).toThrow("Registration is currently limited to ique1116");
+  });
+});
+
 describe("Qwen chat client", () => {
+  it("uses concise no-markdown style rules in the rehab chat prompt", () => {
+    const prompt = buildChatSystemPrompt({ category: "ankle" });
+
+    expect(prompt).toContain("不要使用 Markdown");
+    expect(prompt).toContain("一次只问一个主要问题");
+    expect(prompt).toContain("优先给出可点击选项");
+    expect(prompt).toContain("Mentis 特调的 AI 康复模型");
+    expect(prompt).toContain("不要提及千问");
+  });
+
+  it("builds guided ankle assessment options before giving training advice", () => {
+    const guided = buildGuidedChatResponse(
+      [{ role: "user", content: "昨天崴脚了，今天有点肿" }],
+      { category: "ankle" },
+      "**第一步**：请先排查红旗症状。",
+    );
+
+    expect(guided.assessmentStep).toBe("ankle_weight_bearing");
+    expect(guided.question).toBe("现在能连续走 4 步吗？");
+    expect(guided.options?.map((option) => option.label)).toEqual(["能", "不能", "不确定"]);
+    expect(guided.content).not.toMatch(/\*\*|#{1,6}\s|\|/);
+    expect(guided.planPatch).toBeUndefined();
+  });
+
+  it("builds guided knee assessment options as a single next question", () => {
+    const guided = buildGuidedChatResponse(
+      [{ role: "user", content: "跑步后膝盖肿了，上下楼疼" }],
+      { category: "knee" },
+    );
+
+    expect(guided.assessmentStep).toBe("knee_weight_bearing");
+    expect(guided.question).toBe("现在能正常承重走路吗？");
+    expect(guided.options?.map((option) => option.label)).toEqual(["能", "不能", "不确定"]);
+    expect(guided.content.split("\n").filter(Boolean).length).toBeLessThanOrEqual(2);
+  });
+
+  it("does not create plan patches when red flag answers require offline assessment", () => {
+    const guided = buildGuidedChatResponse(
+      [
+        { role: "user", content: "昨天崴脚了，今天有点肿" },
+        { role: "assistant", content: "先确认能不能走。" },
+        { role: "user", content: "不能" },
+      ],
+      { category: "ankle" },
+    );
+
+    expect(guided.assessmentStep).toBe("ankle_urgent_referral");
+    expect(guided.content).toContain("线下评估");
+    expect(guided.planPatch).toBeUndefined();
+  });
+
   it("calls DashScope compatible chat API without exposing the API key", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetcher = async (url: string | URL | Request, init?: RequestInit) => {
@@ -141,6 +244,98 @@ describe("Qwen chat client", () => {
     };
     expect(body.messages[0].content).toContain("Patellofemoral Pain 2019 LOGO.pdf, page 20");
     expect(body.messages[0].content).toContain("Monitor pain during and 24 hours after activity.");
+  });
+
+  it("wraps model content with guided assessment fields for the chat UI", async () => {
+    let fetchCalls = 0;
+    const fetcher = async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "**第一步**：先确认能不能走。" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const result = await chatWithQwen(
+      [{ role: "user", content: "跑步后脚踝外侧疼" }],
+      { category: "ankle" },
+      { apiKey: "secret-key", fetcher },
+    );
+
+    expect(fetchCalls).toBe(1);
+    expect(result.content).not.toContain("**");
+    expect(result.question).toBe("现在能连续走 4 步吗？");
+    expect(result.options?.length).toBe(3);
+    expect(result.planPatch).toBeUndefined();
+  });
+
+  it("returns local guided options for acute ankle screening without waiting for the model", async () => {
+    let fetchCalls = 0;
+    const fetcher = async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "模型不应被调用" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const result = await chatWithQwen(
+      [{ role: "user", content: "昨天崴脚了，今天有点肿" }],
+      { category: "ankle" },
+      { apiKey: "secret-key", fetcher },
+    );
+
+    expect(fetchCalls).toBe(0);
+    expect(result.assessmentStep).toBe("ankle_weight_bearing");
+    expect(result.question).toBe("现在能连续走 4 步吗？");
+    expect(result.options?.map((option) => option.label)).toEqual(["能", "不能", "不确定"]);
+  });
+
+  it("returns local urgent guidance for red flag option answers without waiting for the model", async () => {
+    let fetchCalls = 0;
+    const fetcher = async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "模型不应被调用" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const result = await chatWithQwen(
+      [
+        { role: "user", content: "昨天崴脚了，今天有点肿" },
+        { role: "assistant", content: "现在能连续走 4 步吗？" },
+        { role: "user", content: "不能" },
+      ],
+      { category: "ankle" },
+      { apiKey: "secret-key", fetcher },
+    );
+
+    expect(fetchCalls).toBe(0);
+    expect(result.assessmentStep).toBe("ankle_urgent_referral");
+    expect(result.content).toContain("线下评估");
+    expect(result.planPatch).toBeUndefined();
+  });
+
+  it("answers model identity questions locally without exposing the provider", async () => {
+    let fetchCalls = 0;
+    const fetcher = async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "不应调用模型" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const result = await chatWithQwen(
+      [{ role: "user", content: "你用的是什么大模型？" }],
+      { category: "knee" },
+      { apiKey: "secret-key", fetcher },
+    );
+
+    expect(fetchCalls).toBe(0);
+    expect(result.content).toBe("我使用的是 Mentis 特调的 AI 康复模型。");
+    expect(result.content).not.toMatch(/千问|Qwen|DashScope|OpenAI|DeepSeek/);
   });
 
   it("aborts slow DashScope requests instead of hanging the chat UI", async () => {

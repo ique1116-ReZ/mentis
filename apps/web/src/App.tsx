@@ -1,18 +1,45 @@
 import { useRef, useState } from "react";
-import { Antigravity } from "./Antigravity";
+import mentisMark from "./assets/mentis-mark-transparent.png";
 import rezLogo from "./assets/rez-logo.png";
 import { evidence } from "./data";
 
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
+  question?: string;
+  options?: ChatOption[];
+  assessmentStep?: string;
+  planPatch?: ChatPlanPatch;
 };
+
+type ChatOption = {
+  id: string;
+  label: string;
+  value: string;
+};
+
+type ChatPlanPatch = Partial<CasePlan>;
 
 type AuthRole = "user" | "clinician" | "organization" | "admin";
 
 type AuthUser = {
   id: string;
   role: AuthRole;
+  displayName: string;
+  profile?: UserProfile;
+};
+
+type UserProfile = {
+  heightCm: string;
+  weightKg: string;
+  sportLevel: string;
+  weeklyFrequency: string;
+  primaryGoal: string;
+};
+
+type RegisterInput = UserProfile & {
+  username: string;
+  password: string;
   displayName: string;
 };
 
@@ -159,6 +186,7 @@ export function App() {
   const selectedCategory = activeCase ? consultCategories.find((category) => category.id === activeCase.categoryId) ?? null : null;
   const messages = activeCase?.messages ?? [];
   const displayName = session?.user.displayName ?? "张运动";
+  const profile = session?.user.profile;
 
   function chooseCategory(category: RehabConsultCategory) {
     const id = `${category.id}-${Date.now()}`;
@@ -173,7 +201,7 @@ export function App() {
       messages: [
         {
           role: "assistant",
-          content: `你好，张运动\n\n你现在进入的是「${category.label}」咨询。接下来我会优先围绕${category.label}相关的运动康复教育、风险分层、训练调整和就医提醒来回答。\n\n我不会编造论文、页码或引用。你可以先描述疼痛位置、诱发动作、疼痛评分和最近训练量。`,
+          content: `你好，${displayName}。先说说你的${category.label}现在最明显的问题。`,
         },
       ],
     };
@@ -195,6 +223,18 @@ export function App() {
     setCases((currentCases) =>
       currentCases.map((patientCase) =>
         patientCase.id === caseId ? { ...patientCase, messages: nextMessages } : patientCase,
+      ),
+    );
+  }
+
+  function applyPlanPatch(caseId: string, planPatch: ChatPlanPatch) {
+    if (!isCompletePlanPatch(planPatch)) {
+      return;
+    }
+
+    setCases((currentCases) =>
+      currentCases.map((patientCase) =>
+        patientCase.id === caseId ? { ...patientCase, plan: planPatch } : patientCase,
       ),
     );
   }
@@ -249,15 +289,32 @@ export function App() {
       if (!response.ok) {
         throw new Error(`chat_failed_${response.status}`);
       }
-      const data = (await response.json()) as { content: string };
-      updateCaseMessages(sendingCase.id, [...nextMessages, { role: "assistant", content: data.content }]);
+      const data = (await response.json()) as {
+        content: string;
+        question?: string;
+        options?: ChatOption[];
+        assessmentStep?: string;
+        planPatch?: ChatPlanPatch;
+      };
+      const assistantMessage: ChatMessage = {
+        role: "assistant",
+        content: data.content,
+        question: data.question,
+        options: Array.isArray(data.options) ? data.options : undefined,
+        assessmentStep: data.assessmentStep,
+        planPatch: data.planPatch,
+      };
+      updateCaseMessages(sendingCase.id, [...nextMessages, assistantMessage]);
+      if (data.planPatch) {
+        applyPlanPatch(sendingCase.id, data.planPatch);
+      }
     } catch {
       updateCaseMessages(sendingCase.id, [
         ...nextMessages,
         {
           role: "assistant",
           content:
-            "我暂时连不上模型服务。你可以先记录疼痛评分、诱发动作和训练量；如果出现无法承重、明显肿胀或夜间加重，请优先线下就医。",
+            "我这边暂时没有回复成功。你可以先记录疼痛评分、诱发动作和训练量；如果出现无法承重、明显肿胀或夜间加重，请优先线下就医。",
         },
       ]);
     } finally {
@@ -286,6 +343,24 @@ export function App() {
         plan: null,
       })),
     );
+  }
+
+  async function register(input: RegisterInput) {
+    const response = await fetch(`${API_BASE}/v1/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok) {
+      throw new Error("register_failed");
+    }
+
+    const nextSession = (await response.json()) as AuthSession;
+    setSession(nextSession);
+    storeSession(nextSession);
+    setCases([]);
+    setActiveCaseId(null);
+    setInput("");
   }
 
   function logout() {
@@ -330,7 +405,7 @@ export function App() {
   }
 
   if (!session) {
-    return <LoginScreen onLogin={login} />;
+    return <LoginScreen onLogin={login} onRegister={register} />;
   }
 
   return (
@@ -385,10 +460,10 @@ export function App() {
           <Panel title="个人数据">
             <dl className="profile-data">
               <div><dt>用户</dt><dd>{displayName}</dd></div>
-              <div><dt>身高 / 体重</dt><dd>175cm / 68kg</dd></div>
-              <div><dt>运动水平</dt><dd>中级跑者</dd></div>
-              <div><dt>周运动频率</dt><dd>4-5 次</dd></div>
-              <div><dt>主要目标</dt><dd>安全恢复跑步</dd></div>
+              <div><dt>身高 / 体重</dt><dd>{profile ? `${profile.heightCm}cm / ${profile.weightKg}kg` : "175cm / 68kg"}</dd></div>
+              <div><dt>运动水平</dt><dd>{profile?.sportLevel ?? "中级跑者"}</dd></div>
+              <div><dt>周运动频率</dt><dd>{profile?.weeklyFrequency ?? "4-5 次"}</dd></div>
+              <div><dt>主要目标</dt><dd>{profile?.primaryGoal ?? "安全恢复跑步"}</dd></div>
             </dl>
           </Panel>
 
@@ -401,7 +476,6 @@ export function App() {
                   <span>{activeCase.summary}</span>
                   <small>{activeCase.createdAt} · {activeCase.status}</small>
                 </div>
-                <RunnerDoodle />
               </div>
             ) : (
               <div className="empty-case">
@@ -453,10 +527,15 @@ export function App() {
             <>
               <div className="chat-scroll" ref={chatScrollRef}>
                 {messages.map((message, index) => (
-                  <MessageBubble key={`${message.role}-${index}`} message={message} />
+                  <MessageBubble
+                    disabled={isSending}
+                    key={`${message.role}-${index}`}
+                    message={message}
+                    onSelectOption={(option) => sendMessage(option.value || option.label)}
+                  />
                 ))}
                 {isSending ? (
-                  <MessageBubble message={{ role: "assistant", content: "正在连接千问，稍等一下..." }} />
+                  <TypingIndicator />
                 ) : null}
               </div>
 
@@ -516,7 +595,6 @@ export function App() {
                     </li>
                   ))}
                 </ol>
-                <CarrotDoodle />
               </div>
             ) : (
               <PendingRecommendation
@@ -601,33 +679,28 @@ function CategoryChooser({
   );
 }
 
-function LoginScreen({ onLogin }: { onLogin: (username: string, password: string) => Promise<void> }) {
+function LoginScreen({
+  onLogin,
+  onRegister,
+}: {
+  onLogin: (username: string, password: string) => Promise<void>;
+  onRegister: (input: RegisterInput) => Promise<void>;
+}) {
+  const [mode, setMode] = useState<"login" | "register">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("ReZ");
+  const [heightCm, setHeightCm] = useState("175");
+  const [weightKg, setWeightKg] = useState("68");
+  const [sportLevel, setSportLevel] = useState("中级跑者");
+  const [weeklyFrequency, setWeeklyFrequency] = useState("4-5 次");
+  const [primaryGoal, setPrimaryGoal] = useState("安全恢复跑步");
   const [error, setError] = useState("");
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const isRegistering = mode === "register";
 
   return (
     <main className="login-page">
-      <div className="login-antigravity" aria-hidden="true">
-        <Antigravity
-          count={300}
-          magnetRadius={10}
-          ringRadius={10}
-          waveSpeed={0.4}
-          waveAmplitude={1}
-          particleSize={2}
-          lerpSpeed={0.1}
-          color="#F97316"
-          autoAnimate={false}
-          particleVariance={1}
-          rotationSpeed={0}
-          depthFactor={1}
-          pulseSpeed={3}
-          particleShape="capsule"
-          fieldStrength={10}
-        />
-      </div>
       <section className="login-shell">
         <div className="login-brand">
           <div className="brand-mark">
@@ -640,13 +713,13 @@ function LoginScreen({ onLogin }: { onLogin: (username: string, password: string
         </div>
 
         <div className="login-copy">
-          <h1>运动康复 AI 用户端</h1>
-          <p>登录后进入你的病例、训练计划和 AI 咨询记录。</p>
+          <h1>{isRegistering ? "创建用户档案" : "运动康复 AI 用户端"}</h1>
+          <p>{isRegistering ? "目前仅开放 ique1116 注册。基础信息会用于问诊和训练计划展示。" : "登录后进入你的病例、训练计划和 AI 咨询记录。"}</p>
         </div>
 
         <div className="role-switch" aria-label="登录角色">
-          <button className="active" type="button">用户端</button>
-          <button disabled type="button">医生/康复师端</button>
+          <button className={!isRegistering ? "active" : ""} onClick={() => setMode("login")} type="button">登录</button>
+          <button className={isRegistering ? "active" : ""} onClick={() => setMode("register")} type="button">注册</button>
         </div>
 
         <form
@@ -655,8 +728,20 @@ function LoginScreen({ onLogin }: { onLogin: (username: string, password: string
             event.preventDefault();
             setError("");
             setIsLoggingIn(true);
-            onLogin(username.trim(), password)
-              .catch(() => setError("登录失败，请检查账号密码或后端服务。"))
+            const action = isRegistering
+              ? onRegister({
+                  username: username.trim(),
+                  password,
+                  displayName: displayName.trim(),
+                  heightCm: heightCm.trim(),
+                  weightKg: weightKg.trim(),
+                  sportLevel: sportLevel.trim(),
+                  weeklyFrequency: weeklyFrequency.trim(),
+                  primaryGoal: primaryGoal.trim(),
+                })
+              : onLogin(username.trim(), password);
+            action
+              .catch(() => setError(isRegistering ? "注册暂未开放给该账号，请使用 ique1116。" : "登录失败，请检查账号密码或后端服务。"))
               .finally(() => setIsLoggingIn(false));
           }}
         >
@@ -673,9 +758,39 @@ function LoginScreen({ onLogin }: { onLogin: (username: string, password: string
               autoComplete="current-password"
             />
           </label>
+          {isRegistering ? (
+            <>
+              <label>
+                昵称
+                <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+              </label>
+              <div className="form-pair">
+                <label>
+                  身高 cm
+                  <input value={heightCm} onChange={(event) => setHeightCm(event.target.value)} inputMode="numeric" />
+                </label>
+                <label>
+                  体重 kg
+                  <input value={weightKg} onChange={(event) => setWeightKg(event.target.value)} inputMode="decimal" />
+                </label>
+              </div>
+              <label>
+                运动水平
+                <input value={sportLevel} onChange={(event) => setSportLevel(event.target.value)} />
+              </label>
+              <label>
+                周运动频率
+                <input value={weeklyFrequency} onChange={(event) => setWeeklyFrequency(event.target.value)} />
+              </label>
+              <label>
+                主要目标
+                <input value={primaryGoal} onChange={(event) => setPrimaryGoal(event.target.value)} />
+              </label>
+            </>
+          ) : null}
           {error ? <p className="login-error">{error}</p> : null}
           <button className="login-submit" disabled={isLoggingIn || !username.trim() || !password} type="submit">
-            {isLoggingIn ? "登录中..." : "进入用户端"}
+            {isLoggingIn ? "处理中..." : isRegistering ? "保存并进入" : "进入用户端"}
           </button>
         </form>
       </section>
@@ -690,6 +805,21 @@ function PendingRecommendation({ title, description }: { title: string; descript
       <strong>{title}</strong>
       <p>{description}</p>
     </div>
+  );
+}
+
+function isCompletePlanPatch(planPatch: ChatPlanPatch): planPatch is CasePlan {
+  return Boolean(
+    planPatch.title &&
+      planPatch.dayLabel &&
+      typeof planPatch.completionPercent === "number" &&
+      Array.isArray(planPatch.items) &&
+      planPatch.items.length > 0 &&
+      planPatch.stage &&
+      typeof planPatch.stage.name === "string" &&
+      typeof planPatch.stage.progressLabel === "string" &&
+      typeof planPatch.stage.progressPercent === "number" &&
+      Array.isArray(planPatch.stage.goals),
   );
 }
 
@@ -715,15 +845,40 @@ function Panel({
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({
+  disabled = false,
+  message,
+  onSelectOption,
+}: {
+  disabled?: boolean;
+  message: ChatMessage;
+  onSelectOption?: (option: ChatOption) => void;
+}) {
   const isAssistant = message.role === "assistant";
+  const options = isAssistant && Array.isArray(message.options) ? message.options : [];
   return (
     <article className={isAssistant ? "message assistant" : "message user"}>
-      {isAssistant ? <BasketDoodle /> : null}
+      {isAssistant ? <AiAvatar /> : null}
       <div className="message-content">
         {message.content.split("\n").map((line, index) => (
           <p key={`${line}-${index}`}>{line || "\u00a0"}</p>
         ))}
+        {isAssistant && message.question ? <p className="message-question">{message.question}</p> : null}
+        {options.length > 0 ? (
+          <div className="message-options">
+            {options.map((option) => (
+              <button
+                className="message-option"
+                disabled={disabled}
+                key={option.id}
+                onClick={() => onSelectOption?.(option)}
+                type="button"
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
         {isAssistant && message.content.includes("参考依据") ? (
           <div className="citation-actions">
             {evidence.citations.slice(0, 2).map((citation, index) => (
@@ -733,6 +888,28 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         ) : null}
       </div>
       {!isAssistant ? <span className="avatar photo">张</span> : null}
+      <time>10:21</time>
+    </article>
+  );
+}
+
+function AiAvatar() {
+  return (
+    <span className="ai-avatar" aria-hidden="true">
+      <img src={mentisMark} alt="" />
+    </span>
+  );
+}
+
+function TypingIndicator() {
+  return (
+    <article className="message assistant">
+      <AiAvatar />
+      <div className="message-content typing-content" aria-label="AI 正在输入">
+        <span />
+        <span />
+        <span />
+      </div>
       <time>10:21</time>
     </article>
   );
@@ -750,37 +927,6 @@ function TinyIcon({ name }: { name: "spark" | "plan" | "calendar" | "book" | "be
   return (
     <svg viewBox="0 0 24 24">
       <path d={paths[name]} />
-    </svg>
-  );
-}
-
-function BasketDoodle() {
-  return (
-    <svg className="basket" viewBox="0 0 80 80" aria-hidden="true">
-      <path d="M18 34c4-18 42-20 49 0" />
-      <path d="M15 36h55L60 66H25z" />
-      <path d="M28 44l9 16M42 42l8 19M56 44 44 62" />
-      <path className="fill-orange" d="M28 26c9-12 21 2 10 17-13-5-18-11-10-17z" />
-      <path className="fill-green" d="M50 25c11 1 13 17 2 22-9-5-10-18-2-22z" />
-      <path d="M28 26c9-12 21 2 10 17-13-5-18-11-10-17zM50 25c11 1 13 17 2 22-9-5-10-18-2-22z" />
-    </svg>
-  );
-}
-
-function RunnerDoodle() {
-  return (
-    <svg className="runner-doodle" viewBox="0 0 82 82" aria-hidden="true">
-      <path className="fill-green" d="M48 19c11-4 18 7 11 17-11 0-18-8-11-17z" />
-      <path d="M48 19c11-4 18 7 11 17-11 0-18-8-11-17zM43 39l-12 12 15 5M51 41l13 8M43 55l-7 19M52 58l14 14M37 34c-8-1-15 2-20 8" />
-    </svg>
-  );
-}
-
-function CarrotDoodle() {
-  return (
-    <svg className="carrot-doodle" viewBox="0 0 88 88" aria-hidden="true">
-      <path className="fill-orange" d="M26 62c18-31 32-43 41-34 9 9-2 22-34 42z" />
-      <path d="M26 62c18-31 32-43 41-34 9 9-2 22-34 42zM46 42l8 8M38 53l8 8M62 24l8-9M66 29l13-3M58 23l-1-13" />
     </svg>
   );
 }

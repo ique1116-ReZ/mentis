@@ -20,6 +20,18 @@ export interface PlatformDemo {
   userMemories: Record<string, UserMemory>;
 }
 
+export interface UserProfile {
+  heightCm: string;
+  weightKg: string;
+  sportLevel: string;
+  weeklyFrequency: string;
+  primaryGoal: string;
+}
+
+export type ProfiledUser = User & {
+  profile?: UserProfile;
+};
+
 export type AssessmentWorkflowInput = Omit<Assessment, "createdAt"> & {
   userId: string;
 };
@@ -37,8 +49,19 @@ export interface LoginInput {
 
 export interface AuthenticatedSession {
   token: string;
-  user: User;
+  user: ProfiledUser;
   memory: UserMemory;
+}
+
+export interface RegistrationInput {
+  username: string;
+  password: string;
+  displayName: string;
+  heightCm: string;
+  weightKg: string;
+  sportLevel: string;
+  weeklyFrequency: string;
+  primaryGoal: string;
 }
 
 export interface MemoryCaseSummary {
@@ -86,6 +109,32 @@ export interface ChatMessage {
 export interface ChatResult {
   content: string;
   model: string;
+}
+
+export interface ChatOption {
+  id: string;
+  label: string;
+  value: string;
+}
+
+export interface ChatPlanPatch {
+  title?: string;
+  dayLabel?: string;
+  completionPercent?: number;
+  items?: Array<{ title: string; meta: string; state: "done" | "todo" }>;
+  stage?: {
+    name: string;
+    progressLabel: string;
+    progressPercent: number;
+    goals: string[];
+  };
+}
+
+export interface GuidedChatResult extends ChatResult {
+  question?: string;
+  options?: ChatOption[];
+  assessmentStep?: string;
+  planPatch?: ChatPlanPatch;
 }
 
 export type RehabConsultCategory = "knee" | "ankle" | "shoulder" | "lower_back" | "hip";
@@ -218,10 +267,54 @@ export function authenticateDemoUser(platform: PlatformDemo, input: LoginInput):
     throw new Error("Invalid username or password");
   }
 
-  const user = platform.users.find((candidate) => candidate.id === credential.userId);
+  const user = platform.users.find((candidate) => candidate.id === credential.userId) as ProfiledUser | undefined;
   if (!user) {
     throw new Error(`Unknown user: ${credential.userId}`);
   }
+
+  return {
+    token: `demo_${user.id}_${demoTokenId()}`,
+    user,
+    memory: getUserMemory(platform, user.id),
+  };
+}
+
+export function registerDemoUser(platform: PlatformDemo, input: RegistrationInput): AuthenticatedSession {
+  const username = input.username.trim();
+  if (username !== "ique1116") {
+    throw new Error("Registration is currently limited to ique1116");
+  }
+  if (!input.password.trim()) {
+    throw new Error("Password is required");
+  }
+
+  const user: ProfiledUser = {
+    id: "user_ique1116",
+    role: "user",
+    displayName: input.displayName.trim() || "ique1116",
+    profile: {
+      heightCm: input.heightCm.trim(),
+      weightKg: input.weightKg.trim(),
+      sportLevel: input.sportLevel.trim(),
+      weeklyFrequency: input.weeklyFrequency.trim(),
+      primaryGoal: input.primaryGoal.trim(),
+    },
+  };
+
+  platform.users = [user, ...platform.users.filter((candidate) => candidate.id !== user.id)];
+  platform.demoCredentials = [
+    { username, password: input.password, userId: user.id },
+    ...platform.demoCredentials.filter((candidate) => candidate.username !== username),
+  ];
+  platform.userMemories[user.id] = {
+    userId: user.id,
+    cases: [],
+    trainingPlans: [],
+    notes: [
+      `${user.profile?.sportLevel || "未填写运动水平"}，每周训练 ${user.profile?.weeklyFrequency || "未填写"}，目标是${user.profile?.primaryGoal || "未填写"}。`,
+    ],
+    updatedAt: new Date().toISOString(),
+  };
 
   return {
     token: `demo_${user.id}_${demoTokenId()}`,
@@ -359,7 +452,12 @@ export class QwenChatClient {
     this.timeoutMs = options.timeoutMs ?? Number(process.env.DASHSCOPE_TIMEOUT_MS ?? 25000);
   }
 
-  async chat(messages: ChatMessage[], context: ChatContext = {}): Promise<ChatResult> {
+  async chat(messages: ChatMessage[], context: ChatContext = {}): Promise<GuidedChatResult> {
+    const localSafetyResponse = buildLocalSafetyResponse(messages, context);
+    if (localSafetyResponse) {
+      return localSafetyResponse;
+    }
+
     if (!this.apiKey) {
       throw new Error("DASHSCOPE_API_KEY is required for Qwen chat.");
     }
@@ -413,7 +511,10 @@ export class QwenChatClient {
     if (!content) {
       throw new Error("DashScope chat returned an empty response.");
     }
-    return { content, model: this.model };
+    return {
+      ...buildGuidedChatResponse(messages, context, content),
+      model: this.model,
+    };
   }
 }
 
@@ -421,7 +522,7 @@ export async function chatWithQwen(
   messages: ChatMessage[],
   context: ChatContext = {},
   options: QwenChatClientOptions = {},
-): Promise<ChatResult> {
+): Promise<GuidedChatResult> {
   return new QwenChatClient(options).chat(messages, context);
 }
 
@@ -439,11 +540,138 @@ export function buildChatSystemPrompt(context: ChatContext = {}): string {
 
   return [
     "你是 Mentis Rehab 的运动康复 AI 助手。你提供康复教育、风险分层、训练建议和就医提醒；不能下诊断、不能替代医生或康复师。遇到红旗症状时，优先建议线下就医。",
+    [
+      "说话规则：使用中文，简短、温和、实用。",
+      "不要使用 Markdown、加粗符号、标题、表格或长编号列表。",
+      "一次只问一个主要问题。",
+      "需要继续评估时，优先给出可点击选项。",
+      "如果用户询问你使用的模型、底层大模型、供应商或技术来源，只回答：我使用的是 Mentis 特调的 AI 康复模型。",
+      "不要提及千问、Qwen、DashScope、DeepSeek、OpenAI 或任何底层模型/供应商名称。",
+    ].join("\n"),
     categoryScope,
     ragContext
       ? `可用 RAG 证据：\n${ragContext}\n回答应优先使用这些证据，并在需要时提及来源。`
       : "当前第一版还没有接入实时 RAG 检索。不要编造 RAG 引用、论文名、页码或不存在的证据来源。",
   ].join("\n\n");
+}
+
+export function buildGuidedChatResponse(
+  messages: ChatMessage[],
+  context: ChatContext = {},
+  modelContent = "",
+): GuidedChatResult {
+  const latestUserMessage = [...messages].reverse().find((message) => message.role === "user");
+  const latestUserContent = latestUserMessage?.content.trim() ?? "";
+  const category = context.category;
+  const content = sanitizeAssistantContent(
+    modelContent || initialGuidedContent(category, latestUserContent),
+  );
+
+  if (category === "ankle") {
+    if (isNegativeChoice(latestUserContent)) {
+      return {
+        content: "这个情况需要先排除骨折或较重韧带损伤。请暂停训练，尽快做线下评估。",
+        model: "guided-template",
+        assessmentStep: "ankle_urgent_referral",
+      };
+    }
+
+    return {
+      content,
+      model: "guided-template",
+      assessmentStep: "ankle_weight_bearing",
+      question: "现在能连续走 4 步吗？",
+      options: yesNoUnsureOptions("ankle_weight_bearing"),
+    };
+  }
+
+  if (category === "knee") {
+    if (isNegativeChoice(latestUserContent)) {
+      return {
+        content: "如果现在不能承重走路，需要先排除较重损伤。请暂停训练，优先线下评估。",
+        model: "guided-template",
+        assessmentStep: "knee_urgent_referral",
+      };
+    }
+
+    return {
+      content,
+      model: "guided-template",
+      assessmentStep: "knee_weight_bearing",
+      question: "现在能正常承重走路吗？",
+      options: yesNoUnsureOptions("knee_weight_bearing"),
+    };
+  }
+
+  return {
+    content,
+    model: "guided-template",
+  };
+}
+
+export function sanitizeAssistantContent(content: string): string {
+  return content
+    .replace(/\*\*/g, "")
+    .replace(/#{1,6}\s*/g, "")
+    .replace(/\|/g, " ")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("\n");
+}
+
+function initialGuidedContent(category: RehabConsultCategory | undefined, latestUserContent: string): string {
+  if (category === "ankle") {
+    return latestUserContent.includes("肿")
+      ? "了解，崴脚后肿胀很常见。我们先确认有没有需要线下评估的信号。"
+      : "先从安全筛查开始，确认脚踝能不能承重。";
+  }
+  if (category === "knee") {
+    return "先确认一个安全问题，再决定是否适合继续做训练调整。";
+  }
+  return "我先帮你做一个简短安全筛查。";
+}
+
+function yesNoUnsureOptions(step: string): ChatOption[] {
+  return [
+    { id: `${step}_yes`, label: "能", value: "能" },
+    { id: `${step}_no`, label: "不能", value: "不能" },
+    { id: `${step}_unsure`, label: "不确定", value: "不确定" },
+  ];
+}
+
+function isNegativeChoice(content: string): boolean {
+  return /不能|不行|走不了|无法/.test(content);
+}
+
+function buildLocalSafetyResponse(messages: ChatMessage[], context: ChatContext): GuidedChatResult | null {
+  const latestUserMessage = [...messages].reverse().find((message) => message.role === "user");
+  const latestUserContent = latestUserMessage?.content.trim() ?? "";
+  if (isModelIdentityQuestion(latestUserContent)) {
+    return {
+      content: "我使用的是 Mentis 特调的 AI 康复模型。",
+      model: "mentis-rehab",
+    };
+  }
+  if (context.category === "ankle" && isAcuteAnkleScreening(latestUserContent)) {
+    return buildGuidedChatResponse(messages, context);
+  }
+  if (!isNegativeChoice(latestUserContent)) {
+    return null;
+  }
+  if (context.category !== "ankle" && context.category !== "knee") {
+    return null;
+  }
+  return buildGuidedChatResponse(messages, context);
+}
+
+function isAcuteAnkleScreening(content: string): boolean {
+  return /崴脚|扭伤|扭了|肿/.test(content);
+}
+
+function isModelIdentityQuestion(content: string): boolean {
+  return /什么.*模型|哪个.*模型|模型.*来源|底层.*模型|用.*模型|供应商|千问|Qwen|DashScope|OpenAI|DeepSeek/i.test(content);
 }
 
 function formatRagContext(snippets: RagEvidenceSnippet[]): string {
