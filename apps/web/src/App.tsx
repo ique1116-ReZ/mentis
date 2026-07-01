@@ -146,6 +146,7 @@ const consultCategories: RehabConsultCategory[] = [
 
 const quickReplies = ["调整今日计划", "疼痛管理建议", "如何判断是否过度训练", "联系康复师"];
 const pendingComplaintTitle = "主诉待补充";
+const clientBuildId = "2026-07-01-1353";
 
 const configuredApiBase = import.meta.env.VITE_API_BASE?.trim();
 const API_BASE = configuredApiBase || (import.meta.env.DEV ? "http://127.0.0.1:3001" : "https://api.aimentis.site");
@@ -425,7 +426,7 @@ export function App() {
   }
 
   return (
-    <main className="app-page">
+    <main className="app-page" data-build-id={clientBuildId}>
       <header className="top-nav">
         <div className="brand">
           <div className="brand-mark">
@@ -732,7 +733,7 @@ function LoginScreen({
   const isRegistering = mode === "register";
 
   return (
-    <main className="login-page">
+    <main className="login-page" data-build-id={clientBuildId}>
       <section className="login-shell">
         <div className="login-brand">
           <div className="brand-mark">
