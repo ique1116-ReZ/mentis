@@ -145,14 +145,7 @@ const consultCategories: RehabConsultCategory[] = [
 ];
 
 const quickReplies = ["调整今日计划", "疼痛管理建议", "如何判断是否过度训练", "联系康复师"];
-
-const caseDefaults: Record<RehabConsultCategoryId, Pick<PatientCase, "title" | "summary">> = {
-  knee: { title: "右膝跑步后疼痛", summary: "跑步膝、上下楼痛、深蹲不适" },
-  ankle: { title: "脚踝稳定性咨询", summary: "崴脚恢复、踝痛、跟腱周围紧张" },
-  shoulder: { title: "肩膀训练疼痛", summary: "举手疼、肩袖不适、过顶动作疼痛" },
-  lower_back: { title: "腰背负荷管理", summary: "训练后腰背疼、久坐腰痛" },
-  hip: { title: "髋部活动度咨询", summary: "髋外侧痛、臀部深处痛" },
-};
+const pendingComplaintTitle = "主诉待补充";
 
 const configuredApiBase = import.meta.env.VITE_API_BASE?.trim();
 const API_BASE = configuredApiBase || (import.meta.env.DEV ? "http://127.0.0.1:3001" : "https://api.aimentis.site");
@@ -185,6 +178,7 @@ export function App() {
   const activeCase = cases.find((patientCase) => patientCase.id === activeCaseId) ?? null;
   const selectedCategory = activeCase ? consultCategories.find((category) => category.id === activeCase.categoryId) ?? null : null;
   const messages = activeCase?.messages ?? [];
+  const hasPrimaryComplaint = activeCase ? !isComplaintPending(activeCase) : false;
   const displayName = session?.user.displayName ?? "张运动";
   const profile = session?.user.profile;
 
@@ -193,15 +187,15 @@ export function App() {
     const newCase: PatientCase = {
       id,
       categoryId: category.id,
-      title: caseDefaults[category.id].title,
-      summary: caseDefaults[category.id].summary,
+      title: pendingComplaintTitle,
+      summary: "等待补充主要不适。",
       createdAt: new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date()),
       status: "咨询中",
       plan: null,
       messages: [
         {
           role: "assistant",
-          content: `你好，${displayName}。先说说你的${category.label}现在最明显的问题。`,
+          content: `${displayName}，请直接输入你最想解决的不适。`,
         },
       ],
     };
@@ -261,7 +255,7 @@ export function App() {
     });
   }
 
-  async function sendMessage(text = input) {
+  async function sendMessage(text = input, options: { captureComplaint?: boolean } = {}) {
     const content = text.trim();
     if (!content || isSending || !activeCase || !selectedCategory) {
       return;
@@ -269,11 +263,33 @@ export function App() {
 
     const sendingCase = activeCase;
     const sendingCategory = selectedCategory;
+    const shouldCaptureComplaint = Boolean(options.captureComplaint) && isComplaintPending(sendingCase);
+    const caseAfterUserInput = shouldCaptureComplaint
+      ? {
+          ...sendingCase,
+          title: makeComplaintTitle(content),
+          summary: makeComplaintSummary(content),
+        }
+      : sendingCase;
     const nextMessages: ChatMessage[] = [...sendingCase.messages, { role: "user", content }];
-    updateCaseMessages(sendingCase.id, nextMessages);
+    setCases((currentCases) =>
+      currentCases.map((patientCase) =>
+        patientCase.id === sendingCase.id
+          ? {
+              ...patientCase,
+              title: caseAfterUserInput.title,
+              summary: caseAfterUserInput.summary,
+              messages: nextMessages,
+            }
+          : patientCase,
+      ),
+    );
     setInput("");
     setIsSending(true);
     syncViewportAfterChatChange();
+    if (shouldCaptureComplaint) {
+      void rememberCaseForCurrentUser({ ...caseAfterUserInput, messages: nextMessages });
+    }
 
     try {
       const response = await fetch(`${API_BASE}/v1/chat`, {
@@ -471,7 +487,7 @@ export function App() {
             {activeCase && selectedCategory ? (
               <div className="case-card current-case">
                 <div>
-                  <span className="case-tag">{selectedCategory.label}咨询</span>
+                  <span className="case-tag">{selectedCategory.label}</span>
                   <strong>{activeCase.title}</strong>
                   <span>{activeCase.summary}</span>
                   <small>{activeCase.createdAt} · {activeCase.status}</small>
@@ -480,7 +496,7 @@ export function App() {
             ) : (
               <div className="empty-case">
                 <strong>还没有当前病例</strong>
-                <span>先在中间选择咨询部位，系统会自动创建病例。</span>
+                <span>先选择需要咨询的部位。</span>
               </div>
             )}
           </Panel>
@@ -508,7 +524,7 @@ export function App() {
               </div>
             ) : (
               <div className="empty-case compact">
-                <span>新咨询会出现在这里。</span>
+                <span>暂无病例</span>
               </div>
             )}
           </Panel>
@@ -517,8 +533,7 @@ export function App() {
         <section className="chat-workspace">
           <div className="chat-title">
             <div>
-              <h1>{selectedCategory ? `${selectedCategory.label}咨询` : "选择咨询部位"}</h1>
-              <span>{selectedCategory ? "围绕当前部位回答" : "从最接近的不适位置开始"}</span>
+              <h1>{selectedCategory ? (hasPrimaryComplaint ? activeCase?.title : "请描述主要不适") : "你想先咨询哪个部位?"}</h1>
             </div>
             {selectedCategory ? <button onClick={resetCategory}>新开咨询</button> : null}
           </div>
@@ -539,25 +554,27 @@ export function App() {
                 ) : null}
               </div>
 
-              <div className="quick-actions">
-                {quickReplies.map((reply) => (
-                  <button key={reply} onClick={() => sendMessage(reply)}>
-                    {reply}
-                  </button>
-                ))}
-              </div>
+              {hasPrimaryComplaint ? (
+                <div className="quick-actions">
+                  {quickReplies.map((reply) => (
+                    <button key={reply} onClick={() => sendMessage(reply)}>
+                      {reply}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
 
               <form
                 className="chat-composer"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void sendMessage();
+                  void sendMessage(input, { captureComplaint: true });
                 }}
               >
                 <input
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
-                  placeholder={`描述你的${selectedCategory.label}问题，例如“${selectedCategory.examples[0]}”`}
+                  placeholder={`例如：${selectedCategory.examples[0]}，疼痛 4/10`}
                 />
                 <button type="button" aria-label="添加资料">＋</button>
                 <button type="button" aria-label="语音输入">🎙</button>
@@ -598,8 +615,8 @@ export function App() {
               </div>
             ) : (
               <PendingRecommendation
-                title={activeCase ? "问诊后生成今日计划" : "选择病例后生成今日计划"}
-                description={activeCase ? "先补充疼痛位置、诱发动作、疼痛评分和最近训练量，AI 会基于病例生成计划草案。" : "当前还没有病例，选择咨询部位后再开始问诊。"}
+                title={activeCase ? "问诊后生成今日计划" : "暂无今日计划"}
+                description={activeCase ? "补充主诉、疼痛评分和训练量后生成。" : "开始咨询后再生成。"}
               />
             )}
           </Panel>
@@ -624,7 +641,7 @@ export function App() {
             ) : (
               <PendingRecommendation
                 title="康复阶段待评估"
-                description="康复阶段需要基于完整问诊和风险分层生成，未问诊前不展示默认阶段。"
+                description="完成问诊后再显示。"
               />
             )}
           </Panel>
@@ -661,11 +678,6 @@ function CategoryChooser({
 }) {
   return (
     <div className="category-entry">
-      <div className="category-copy">
-        <span>AI 专项咨询</span>
-        <h2>你想先咨询哪个部位?</h2>
-        <p>告诉我最主要的不适位置，我会从疼痛表现、训练负荷和风险信号开始问起。</p>
-      </div>
       <div className="category-grid">
         {categories.map((category) => (
           <button className="category-card" key={category.id} onClick={() => onSelect(category)}>
@@ -677,6 +689,26 @@ function CategoryChooser({
       </div>
     </div>
   );
+}
+
+function isComplaintPending(patientCase: PatientCase) {
+  return patientCase.title === pendingComplaintTitle;
+}
+
+function makeComplaintTitle(content: string) {
+  return truncateText(content, 18);
+}
+
+function makeComplaintSummary(content: string) {
+  return truncateText(content, 34);
+}
+
+function truncateText(content: string, maxLength: number) {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength - 1)}…`;
 }
 
 function LoginScreen({
