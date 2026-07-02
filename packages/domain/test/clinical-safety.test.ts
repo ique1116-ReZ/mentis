@@ -182,6 +182,30 @@ describe("clinical safety and case access", () => {
       ),
     ).toBe(false);
     expect(canAccessAuthorizedCase(clinician, authorization, "case_1", "not-a-date")).toBe(false);
+    expect(
+      canAccessAuthorizedCase(
+        clinician,
+        {
+          ...authorization,
+          startsAt: "2026-07-02T02:00:00.000Z",
+          endsAt: "2026-07-02T02:00:00.000Z",
+        },
+        "case_1",
+        "2026-07-02T02:00:00.000Z",
+      ),
+    ).toBe(false);
+    expect(
+      canAccessAuthorizedCase(
+        clinician,
+        {
+          ...authorization,
+          startsAt: "2026-07-02T03:00:00.000Z",
+          endsAt: "2026-07-02T02:00:00.000Z",
+        },
+        "case_1",
+        "2026-07-02T02:30:00.000Z",
+      ),
+    ).toBe(false);
   });
 
   it("opens a 15 minute consultation when both parties are present", () => {
@@ -255,6 +279,26 @@ describe("clinical safety and case access", () => {
     expect(() => activateConsultationSession(session, "not-a-date")).toThrow(
       "Consultation schedule contains invalid dates",
     );
+    expect(() =>
+      activateConsultationSession(
+        {
+          ...session,
+          scheduledStartAt: "2026-07-02T02:00:00.000Z",
+          scheduledEndAt: "2026-07-02T02:00:00.000Z",
+        },
+        "2026-07-02T02:00:00.000Z",
+      ),
+    ).toThrow("Consultation schedule contains invalid dates");
+    expect(() =>
+      activateConsultationSession(
+        {
+          ...session,
+          scheduledStartAt: "2026-07-02T02:30:00.000Z",
+          scheduledEndAt: "2026-07-02T02:00:00.000Z",
+        },
+        "2026-07-02T02:15:00.000Z",
+      ),
+    ).toThrow("Consultation schedule contains invalid dates");
   });
 
   it("keeps active consultation expiry fixed on repeated activation", () => {
@@ -324,6 +368,10 @@ describe("clinical safety and case access", () => {
     );
     expect(canSendConsultationMessage(active, "2026-07-02T02:18:00.000Z")).toBe(false);
     expect(canSendConsultationMessage({ ...active, expiresAt: "not-a-date" }, "2026-07-02T02:04:00.000Z")).toBe(
+      false,
+    );
+    expect(canSendConsultationMessage(active, "not-a-date")).toBe(false);
+    expect(canSendConsultationMessage({ ...active, activatedAt: "not-a-date" }, "2026-07-02T02:04:00.000Z")).toBe(
       false,
     );
   });
