@@ -378,11 +378,18 @@ export function canAccessAuthorizedCase(
   if (caseId !== authorization.caseId) {
     return false;
   }
-  const accessTime = new Date(at).getTime();
+  const accessTime = toFiniteTime(at);
+  const startsAt = toFiniteTime(authorization.startsAt);
+  const endsAt = toFiniteTime(authorization.endsAt);
   if (
-    accessTime < new Date(authorization.startsAt).getTime() ||
-    accessTime >= new Date(authorization.endsAt).getTime()
+    accessTime === undefined ||
+    startsAt === undefined ||
+    endsAt === undefined ||
+    startsAt >= endsAt
   ) {
+    return false;
+  }
+  if (accessTime < startsAt || accessTime >= endsAt) {
     return false;
   }
   if (actor.role === "admin") {
@@ -411,7 +418,22 @@ export function activateConsultationSession(
     throw new Error(`Cannot activate consultation with status ${session.status}`);
   }
 
-  const expiresAt = new Date(new Date(activatedAt).getTime() + session.durationMinutes * 60_000).toISOString();
+  const activatedAtTime = toFiniteTime(activatedAt);
+  const scheduledStartAt = toFiniteTime(session.scheduledStartAt);
+  const scheduledEndAt = toFiniteTime(session.scheduledEndAt);
+  if (
+    activatedAtTime === undefined ||
+    scheduledStartAt === undefined ||
+    scheduledEndAt === undefined ||
+    scheduledStartAt >= scheduledEndAt
+  ) {
+    throw new Error("Consultation schedule contains invalid dates");
+  }
+  if (activatedAtTime < scheduledStartAt || activatedAtTime >= scheduledEndAt) {
+    throw new Error("Consultation can only be activated within its scheduled window");
+  }
+
+  const expiresAt = new Date(activatedAtTime + session.durationMinutes * 60_000).toISOString();
   return {
     ...session,
     status: "active",
@@ -446,11 +468,18 @@ export function canSendConsultationMessage(
   ) {
     return false;
   }
-  const messageTime = new Date(at).getTime();
-  return (
-    messageTime >= new Date(session.activatedAt).getTime() &&
-    messageTime < new Date(session.expiresAt).getTime()
-  );
+  const messageTime = toFiniteTime(at);
+  const activatedAt = toFiniteTime(session.activatedAt);
+  const expiresAt = toFiniteTime(session.expiresAt);
+  if (
+    messageTime === undefined ||
+    activatedAt === undefined ||
+    expiresAt === undefined ||
+    activatedAt >= expiresAt
+  ) {
+    return false;
+  }
+  return messageTime >= activatedAt && messageTime < expiresAt;
 }
 
 export function createTrainingPlan(input: TrainingPlan): TrainingPlan {
@@ -494,6 +523,11 @@ function formatCitationLabel(citation: EvidenceCitation): string {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function toFiniteTime(value: string): number | undefined {
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : undefined;
 }
 
 function cryptoSafeId(): string {

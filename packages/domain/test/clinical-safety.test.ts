@@ -165,6 +165,23 @@ describe("clinical safety and case access", () => {
     expect(canAccessAuthorizedCase(clinician, authorization, "case_2", "2026-07-02T02:30:00.000Z")).toBe(false);
     expect(canAccessAuthorizedCase(clinician, authorization, "case_1", "2026-07-02T01:59:59.000Z")).toBe(false);
     expect(canAccessAuthorizedCase(clinician, authorization, "case_1", "2026-07-02T03:00:00.000Z")).toBe(false);
+    expect(
+      canAccessAuthorizedCase(
+        clinician,
+        { ...authorization, startsAt: "not-a-date" },
+        "case_1",
+        "2026-07-02T02:30:00.000Z",
+      ),
+    ).toBe(false);
+    expect(
+      canAccessAuthorizedCase(
+        clinician,
+        { ...authorization, endsAt: "not-a-date" },
+        "case_1",
+        "2026-07-02T02:30:00.000Z",
+      ),
+    ).toBe(false);
+    expect(canAccessAuthorizedCase(clinician, authorization, "case_1", "not-a-date")).toBe(false);
   });
 
   it("opens a 15 minute consultation when both parties are present", () => {
@@ -188,6 +205,56 @@ describe("clinical safety and case access", () => {
     expect(active.expiresAt).toBe("2026-07-02T02:18:00.000Z");
     expect(canSendConsultationMessage(active, "2026-07-02T02:17:59.000Z")).toBe(true);
     expect(canSendConsultationMessage(active, "2026-07-02T02:18:00.000Z")).toBe(false);
+  });
+
+  it("rejects consultation activation outside the scheduled window", () => {
+    const session: ConsultationSession = {
+      id: "consult_1",
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      caseId: "case_1",
+      status: "scheduled",
+      paymentStatus: "paid",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+      durationMinutes: 15,
+      createdAt: "2026-07-02T01:50:00.000Z",
+    };
+
+    expect(() => activateConsultationSession(session, "2026-07-02T01:59:59.000Z")).toThrow(
+      "Consultation can only be activated within its scheduled window",
+    );
+    expect(() => activateConsultationSession(session, "2026-07-02T02:30:00.000Z")).toThrow(
+      "Consultation can only be activated within its scheduled window",
+    );
+    expect(() => activateConsultationSession(session, "2026-07-02T02:31:00.000Z")).toThrow(
+      "Consultation can only be activated within its scheduled window",
+    );
+  });
+
+  it("rejects consultation activation when schedule dates are invalid", () => {
+    const session: ConsultationSession = {
+      id: "consult_1",
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      caseId: "case_1",
+      status: "scheduled",
+      paymentStatus: "paid",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+      durationMinutes: 15,
+      createdAt: "2026-07-02T01:50:00.000Z",
+    };
+
+    expect(() =>
+      activateConsultationSession({ ...session, scheduledStartAt: "not-a-date" }, "2026-07-02T02:03:00.000Z"),
+    ).toThrow("Consultation schedule contains invalid dates");
+    expect(() =>
+      activateConsultationSession({ ...session, scheduledEndAt: "not-a-date" }, "2026-07-02T02:03:00.000Z"),
+    ).toThrow("Consultation schedule contains invalid dates");
+    expect(() => activateConsultationSession(session, "not-a-date")).toThrow(
+      "Consultation schedule contains invalid dates",
+    );
   });
 
   it("keeps active consultation expiry fixed on repeated activation", () => {
@@ -256,6 +323,9 @@ describe("clinical safety and case access", () => {
       false,
     );
     expect(canSendConsultationMessage(active, "2026-07-02T02:18:00.000Z")).toBe(false);
+    expect(canSendConsultationMessage({ ...active, expiresAt: "not-a-date" }, "2026-07-02T02:04:00.000Z")).toBe(
+      false,
+    );
   });
 
   it("keeps AI and clinician plans as separate patient-confirmed records", () => {
