@@ -240,6 +240,31 @@ describe("clinical safety and case access", () => {
     expect(canSendConsultationMessage(active, "2026-07-02T02:18:00.000Z")).toBe(false);
   });
 
+  it("rejects consultation activation when duration is invalid", () => {
+    const session: ConsultationSession = {
+      id: "consult_1",
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      caseId: "case_1",
+      status: "scheduled",
+      paymentStatus: "paid",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+      durationMinutes: 15,
+      createdAt: "2026-07-02T01:50:00.000Z",
+    };
+
+    expect(() =>
+      activateConsultationSession({ ...session, durationMinutes: 0 }, "2026-07-02T02:03:00.000Z"),
+    ).toThrow("Consultation duration must be positive");
+    expect(() =>
+      activateConsultationSession({ ...session, durationMinutes: -15 }, "2026-07-02T02:03:00.000Z"),
+    ).toThrow("Consultation duration must be positive");
+    expect(() =>
+      activateConsultationSession({ ...session, durationMinutes: Number.NaN }, "2026-07-02T02:03:00.000Z"),
+    ).toThrow("Consultation duration must be positive");
+  });
+
   it("rejects consultation activation outside the scheduled window", () => {
     const session: ConsultationSession = {
       id: "consult_1",
@@ -408,6 +433,11 @@ describe("clinical safety and case access", () => {
         { ...active, expiresAt: "2026-07-02T02:19:00.000Z" },
         "2026-07-02T02:18:30.000Z",
       ),
+    ).toBe(false);
+    expect(canSendConsultationMessage({ ...active, durationMinutes: 0 }, "2026-07-02T02:04:00.000Z")).toBe(false);
+    expect(canSendConsultationMessage({ ...active, durationMinutes: -15 }, "2026-07-02T02:04:00.000Z")).toBe(false);
+    expect(
+      canSendConsultationMessage({ ...active, durationMinutes: Number.NaN }, "2026-07-02T02:04:00.000Z"),
     ).toBe(false);
     expect(
       canSendConsultationMessage(
