@@ -471,10 +471,18 @@ export function canSendConsultationMessage(
   const messageTime = toFiniteTime(at);
   const activatedAt = toFiniteTime(session.activatedAt);
   const expiresAt = toFiniteTime(session.expiresAt);
+  const scheduledStartAt = toFiniteTime(session.scheduledStartAt);
+  const scheduledEndAt = toFiniteTime(session.scheduledEndAt);
   if (
     messageTime === undefined ||
     activatedAt === undefined ||
     expiresAt === undefined ||
+    scheduledStartAt === undefined ||
+    scheduledEndAt === undefined ||
+    scheduledStartAt >= scheduledEndAt ||
+    activatedAt < scheduledStartAt ||
+    activatedAt >= scheduledEndAt ||
+    expiresAt > activatedAt + session.durationMinutes * 60_000 ||
     activatedAt >= expiresAt
   ) {
     return false;
@@ -526,8 +534,12 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function toFiniteTime(value: string): number | undefined {
-  const time = new Date(value).getTime();
-  return Number.isFinite(time) ? time : undefined;
+  const date = new Date(value);
+  const time = date.getTime();
+  if (!Number.isFinite(time) || date.toISOString() !== value) {
+    return undefined;
+  }
+  return time;
 }
 
 function cryptoSafeId(): string {

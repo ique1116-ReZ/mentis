@@ -185,6 +185,15 @@ describe("clinical safety and case access", () => {
     expect(
       canAccessAuthorizedCase(
         clinician,
+        { ...authorization, startsAt: "2026-02-30T00:00:00.000Z" },
+        "case_1",
+        "2026-07-02T02:30:00.000Z",
+      ),
+    ).toBe(false);
+    expect(canAccessAuthorizedCase(clinician, authorization, "case_1", "2026-02-30T00:00:00.000Z")).toBe(false);
+    expect(
+      canAccessAuthorizedCase(
+        clinician,
         {
           ...authorization,
           startsAt: "2026-07-02T02:00:00.000Z",
@@ -283,6 +292,26 @@ describe("clinical safety and case access", () => {
       activateConsultationSession(
         {
           ...session,
+          scheduledStartAt: "2026-02-30T00:00:00.000Z",
+          scheduledEndAt: "2026-03-03T00:00:00.000Z",
+        },
+        "2026-03-02T00:00:00.000Z",
+      ),
+    ).toThrow("Consultation schedule contains invalid dates");
+    expect(() =>
+      activateConsultationSession(
+        {
+          ...session,
+          scheduledStartAt: "2026-03-01T00:00:00.000Z",
+          scheduledEndAt: "2026-03-03T00:00:00.000Z",
+        },
+        "2026-02-30T00:00:00.000Z",
+      ),
+    ).toThrow("Consultation schedule contains invalid dates");
+    expect(() =>
+      activateConsultationSession(
+        {
+          ...session,
           scheduledStartAt: "2026-07-02T02:00:00.000Z",
           scheduledEndAt: "2026-07-02T02:00:00.000Z",
         },
@@ -374,6 +403,53 @@ describe("clinical safety and case access", () => {
     expect(canSendConsultationMessage({ ...active, activatedAt: "not-a-date" }, "2026-07-02T02:04:00.000Z")).toBe(
       false,
     );
+    expect(
+      canSendConsultationMessage(
+        { ...active, expiresAt: "2026-07-02T02:19:00.000Z" },
+        "2026-07-02T02:18:30.000Z",
+      ),
+    ).toBe(false);
+    expect(
+      canSendConsultationMessage(
+        {
+          ...active,
+          activatedAt: "2026-07-02T01:59:59.000Z",
+          expiresAt: "2026-07-02T02:14:59.000Z",
+        },
+        "2026-07-02T02:04:00.000Z",
+      ),
+    ).toBe(false);
+    expect(
+      canSendConsultationMessage(
+        {
+          ...active,
+          activatedAt: "2026-07-02T02:30:00.000Z",
+          expiresAt: "2026-07-02T02:45:00.000Z",
+        },
+        "2026-07-02T02:35:00.000Z",
+      ),
+    ).toBe(false);
+  });
+
+  it("allows valid late activation to chat for the full active duration", () => {
+    const active = activateConsultationSession(
+      {
+        id: "consult_1",
+        patientUserId: "user_1",
+        clinicianId: "clinician_1",
+        caseId: "case_1",
+        status: "scheduled",
+        paymentStatus: "paid",
+        scheduledStartAt: "2026-07-02T02:00:00.000Z",
+        scheduledEndAt: "2026-07-02T02:30:00.000Z",
+        durationMinutes: 15,
+        createdAt: "2026-07-02T01:50:00.000Z",
+      },
+      "2026-07-02T02:29:00.000Z",
+    );
+
+    expect(active.expiresAt).toBe("2026-07-02T02:44:00.000Z");
+    expect(canSendConsultationMessage(active, "2026-07-02T02:35:00.000Z")).toBe(true);
   });
 
   it("keeps AI and clinician plans as separate patient-confirmed records", () => {
