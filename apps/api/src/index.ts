@@ -1,13 +1,23 @@
 import {
+  activateConsultationSession,
   assessRedFlags,
+  buildCaseAuthorization,
   buildInitialAssessment,
+  canAccessAuthorizedCase,
+  canSendConsultationMessage,
   createAuditEvent,
+  createTrainingPlan,
   draftKneeRunningPlan,
   type Assessment,
+  type ActionLibraryItem,
   type AuditEvent,
+  type CaseAuthorization,
   type Clinician,
+  type ConsultationMessage,
+  type ConsultationSession,
   type RehabPlan,
   type TriageResult,
+  type TrainingPlan,
   type User,
 } from "@mentis/domain";
 import { readFileSync, existsSync } from "node:fs";
@@ -15,22 +25,34 @@ import { dirname, join, parse, resolve } from "node:path";
 
 export interface PlatformDemo {
   users: User[];
-  clinicians: Clinician[];
+  clinicians: DemoClinician[];
   demoCredentials: DemoCredential[];
   userMemories: Record<string, UserMemory>;
+  consultations: ConsultationSession[];
+  caseAuthorizations: CaseAuthorization[];
+  consultationMessages: ConsultationMessage[];
+  trainingPlans: TrainingPlan[];
+  actionLibrary: ActionLibraryItem[];
+  presence: Record<string, ConsultationPresence>;
 }
 
 export interface UserProfile {
   heightCm: string;
   weightKg: string;
-  sportLevel: string;
-  weeklyFrequency: string;
-  primaryGoal: string;
 }
 
 export type ProfiledUser = User & {
   profile?: UserProfile;
 };
+
+export type DemoClinician = Clinician & {
+  discipline?: string;
+  credentialSummary?: string;
+  organizationName?: string;
+  registeredAt?: string;
+};
+
+export type AuthenticatedActor = ProfiledUser | DemoClinician;
 
 export type AssessmentWorkflowInput = Omit<Assessment, "createdAt"> & {
   userId: string;
@@ -39,7 +61,8 @@ export type AssessmentWorkflowInput = Omit<Assessment, "createdAt"> & {
 export interface DemoCredential {
   username: string;
   password: string;
-  userId: string;
+  actorId: string;
+  actorRole: "user" | "clinician";
 }
 
 export interface LoginInput {
@@ -49,19 +72,22 @@ export interface LoginInput {
 
 export interface AuthenticatedSession {
   token: string;
-  user: ProfiledUser;
+  user: AuthenticatedActor;
   memory: UserMemory;
 }
 
 export interface RegistrationInput {
+  accountRole?: "user" | "clinician";
   username: string;
   password: string;
   displayName: string;
+  inviteCode: string;
   heightCm: string;
   weightKg: string;
-  sportLevel: string;
-  weeklyFrequency: string;
-  primaryGoal: string;
+  discipline?: string;
+  credentialSummary?: string;
+  specialties?: string[];
+  organizationName?: string;
 }
 
 export interface MemoryCaseSummary {
@@ -75,10 +101,25 @@ export interface MemoryCaseSummary {
 
 export interface MemoryTrainingPlan {
   id: string;
+  caseId: string;
+  categoryId: RehabConsultCategory;
   title: string;
   status: "active" | "paused" | "completed";
+  dayLabel: string;
+  completionPercent: number;
+  items: Array<{ title: string; meta: string; state: "done" | "todo" }>;
+  stage: {
+    name: string;
+    progressLabel: string;
+    progressPercent: number;
+    goals: string[];
+  };
   updatedAt: string;
 }
+
+export type MemoryTrainingPlanInput = Omit<MemoryTrainingPlan, "updatedAt"> & {
+  updatedAt?: string;
+};
 
 export interface UserMemory {
   userId: string;
@@ -86,6 +127,11 @@ export interface UserMemory {
   trainingPlans: MemoryTrainingPlan[];
   notes: string[];
   updatedAt: string;
+}
+
+export interface ConsultationPresence {
+  patientPresent: boolean;
+  clinicianPresent: boolean;
 }
 
 export interface AssessmentWorkflowResult {
@@ -104,6 +150,8 @@ export type ChatRole = "system" | "user" | "assistant";
 export interface ChatMessage {
   role: ChatRole;
   content: string;
+  question?: string;
+  assessmentStep?: string;
 }
 
 export interface ChatResult {
@@ -151,6 +199,7 @@ export interface RagEvidenceSnippet {
   page?: number | string;
   text: string;
   score?: number;
+  evidenceType?: string;
 }
 
 export interface ChatContext {
@@ -235,7 +284,15 @@ export function createPlatformDemo(): PlatformDemo {
         specialties: ["knee", "running"],
       },
     ],
-    demoCredentials: getDemoCredentials(),
+    demoCredentials: [
+      ...getDemoCredentials(),
+      {
+        username: "clinician_demo",
+        password: "mentis_clinician",
+        actorId: "clinician_1",
+        actorRole: "clinician",
+      },
+    ],
     userMemories: {
       user_1: {
         userId: "user_1",
@@ -245,7 +302,40 @@ export function createPlatformDemo(): PlatformDemo {
         updatedAt: new Date().toISOString(),
       },
     },
+    consultations: [],
+    caseAuthorizations: [],
+    consultationMessages: [],
+    trainingPlans: [],
+    actionLibrary: buildSeedActionLibrary(),
+    presence: {},
   };
+}
+
+function buildSeedActionLibrary(): ActionLibraryItem[] {
+  return [
+    {
+      id: "action_quad_iso",
+      title: "股四头肌等长收缩",
+      bodyRegion: "knee",
+      phase: "镇痛与激活",
+      defaultDosage: "3 组 x 30 秒",
+      instructions: ["坐位或仰卧位伸直膝盖", "轻轻绷紧大腿前侧", "保持呼吸，不要憋气"],
+      contraindications: ["训练中疼痛明显加重", "术后限制未确认"],
+      progressionCriteria: ["完成后 24 小时无明显加重"],
+      tags: ["膝盖", "等长", "低刺激"],
+    },
+    {
+      id: "action_wall_sit",
+      title: "靠墙静蹲",
+      bodyRegion: "knee",
+      phase: "负荷控制",
+      defaultDosage: "4 组 x 20 秒",
+      instructions: ["背靠墙缓慢下蹲到可耐受角度", "膝盖对齐脚尖", "保持疼痛不超过 3/10"],
+      contraindications: ["明显肿胀", "无法承重", "急性外伤后未评估"],
+      progressionCriteria: ["可完成 4 组且次日无加重"],
+      tags: ["膝盖", "股四头肌", "静态"],
+    },
+  ];
 }
 
 function getDemoCredentials(): DemoCredential[] {
@@ -256,7 +346,7 @@ function getDemoCredentials(): DemoCredential[] {
     return [];
   }
 
-  return [{ username, password, userId: "user_1" }];
+  return [{ username, password, actorId: "user_1", actorRole: "user" }];
 }
 
 export function authenticateDemoUser(platform: PlatformDemo, input: LoginInput): AuthenticatedSession {
@@ -267,9 +357,22 @@ export function authenticateDemoUser(platform: PlatformDemo, input: LoginInput):
     throw new Error("Invalid username or password");
   }
 
-  const user = platform.users.find((candidate) => candidate.id === credential.userId) as ProfiledUser | undefined;
+  if (credential.actorRole === "clinician") {
+    const clinician = platform.clinicians.find((candidate) => candidate.id === credential.actorId);
+    if (!clinician) {
+      throw new Error(`Unknown clinician: ${credential.actorId}`);
+    }
+
+    return {
+      token: `demo_${clinician.id}_${demoTokenId()}`,
+      user: clinician,
+      memory: emptyUserMemory(clinician.id),
+    };
+  }
+
+  const user = platform.users.find((candidate) => candidate.id === credential.actorId) as ProfiledUser | undefined;
   if (!user) {
-    throw new Error(`Unknown user: ${credential.userId}`);
+    throw new Error(`Unknown user: ${credential.actorId}`);
   }
 
   return {
@@ -281,46 +384,90 @@ export function authenticateDemoUser(platform: PlatformDemo, input: LoginInput):
 
 export function registerDemoUser(platform: PlatformDemo, input: RegistrationInput): AuthenticatedSession {
   const username = input.username.trim();
-  if (username !== "ique1116") {
-    throw new Error("Registration is currently limited to ique1116");
+  if (!username) {
+    throw new Error("Username is required");
+  }
+  if (input.inviteCode.trim() !== "ique1116") {
+    throw new Error("Invalid invite code");
   }
   if (!input.password.trim()) {
     throw new Error("Password is required");
   }
 
+  if ((input.accountRole ?? "user") === "clinician") {
+    const clinicianId = `clinician_${username.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+    const clinician: DemoClinician = {
+      id: clinicianId,
+      role: "clinician",
+      displayName: input.displayName.trim() || "待审核康复师",
+      credentialStatus: "pending",
+      specialties: normalizeSpecialties(input.specialties, input.discipline),
+      discipline: input.discipline?.trim() || undefined,
+      credentialSummary: input.credentialSummary?.trim() || undefined,
+      organizationName: input.organizationName?.trim() || undefined,
+      registeredAt: new Date().toISOString(),
+    };
+
+    platform.clinicians = [
+      clinician,
+      ...platform.clinicians.filter((candidate) => candidate.id !== clinician.id),
+    ];
+    platform.demoCredentials = [
+      { username, password: input.password, actorId: clinician.id, actorRole: "clinician" },
+      ...platform.demoCredentials.filter((candidate) => candidate.username !== username),
+    ];
+
+    return {
+      token: `demo_${clinician.id}_${demoTokenId()}`,
+      user: clinician,
+      memory: emptyUserMemory(clinician.id),
+    };
+  }
+
+  const userId = `user_${username.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
   const user: ProfiledUser = {
-    id: "user_ique1116",
+    id: userId,
     role: "user",
     displayName: input.displayName.trim() || "ique1116",
     profile: {
       heightCm: input.heightCm.trim(),
       weightKg: input.weightKg.trim(),
-      sportLevel: input.sportLevel.trim(),
-      weeklyFrequency: input.weeklyFrequency.trim(),
-      primaryGoal: input.primaryGoal.trim(),
     },
   };
 
   platform.users = [user, ...platform.users.filter((candidate) => candidate.id !== user.id)];
   platform.demoCredentials = [
-    { username, password: input.password, userId: user.id },
+    { username, password: input.password, actorId: user.id, actorRole: "user" },
     ...platform.demoCredentials.filter((candidate) => candidate.username !== username),
   ];
-  platform.userMemories[user.id] = {
-    userId: user.id,
-    cases: [],
-    trainingPlans: [],
-    notes: [
-      `${user.profile?.sportLevel || "未填写运动水平"}，每周训练 ${user.profile?.weeklyFrequency || "未填写"}，目标是${user.profile?.primaryGoal || "未填写"}。`,
-    ],
-    updatedAt: new Date().toISOString(),
-  };
+  platform.userMemories[user.id] = emptyUserMemory(user.id);
 
   return {
     token: `demo_${user.id}_${demoTokenId()}`,
     user,
     memory: getUserMemory(platform, user.id),
   };
+}
+
+function emptyUserMemory(userId: string): UserMemory {
+  return {
+    userId,
+    cases: [],
+    trainingPlans: [],
+    notes: [],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function normalizeSpecialties(specialties: string[] | undefined, discipline: string | undefined): string[] {
+  const normalized = (specialties ?? [])
+    .map((specialty) => specialty.trim())
+    .filter(Boolean);
+  if (normalized.length > 0) {
+    return Array.from(new Set(normalized));
+  }
+  const fallback = discipline?.trim();
+  return fallback ? [fallback] : [];
 }
 
 export function getUserMemory(platform: PlatformDemo, userId: string): UserMemory {
@@ -346,6 +493,386 @@ export function rememberCase(platform: PlatformDemo, userId: string, input: Memo
   memory.cases = [nextCase, ...memory.cases.filter((candidate) => candidate.id !== nextCase.id)];
   memory.updatedAt = new Date().toISOString();
   return memory;
+}
+
+export function deleteRememberedCase(platform: PlatformDemo, userId: string, caseId: string): UserMemory {
+  const memory = getUserMemory(platform, userId);
+  const target = memory.cases.find((candidate) => candidate.id === caseId);
+  if (!target) {
+    return memory;
+  }
+  if (isAcceptedPrescriptionStatus(target.status)) {
+    throw new Error("Accepted prescription cases cannot be deleted");
+  }
+
+  memory.cases = memory.cases.filter((candidate) => candidate.id !== caseId);
+  memory.updatedAt = new Date().toISOString();
+  return memory;
+}
+
+export function rememberTrainingPlan(
+  platform: PlatformDemo,
+  userId: string,
+  input: MemoryTrainingPlanInput,
+): UserMemory {
+  const memory = getUserMemory(platform, userId);
+  const now = new Date().toISOString();
+  const nextPlan: MemoryTrainingPlan = {
+    ...input,
+    updatedAt: input.updatedAt || now,
+  };
+
+  memory.trainingPlans = [
+    nextPlan,
+    ...memory.trainingPlans.filter((candidate) => candidate.id !== nextPlan.id),
+  ];
+  memory.cases = memory.cases.map((candidate) =>
+    candidate.id === nextPlan.caseId ? { ...candidate, status: "运动处方已接受" } : candidate,
+  );
+  memory.updatedAt = now;
+  return memory;
+}
+
+export interface ConsultationCreateInput {
+  patientUserId: string;
+  clinicianId: string;
+  caseId: string;
+  scheduledStartAt: string;
+  scheduledEndAt: string;
+  createdAt?: string;
+}
+
+export interface ConsultationSnapshot {
+  session: ConsultationSession;
+  authorization: CaseAuthorization;
+  messages: ConsultationMessage[];
+  plans: TrainingPlan[];
+  actionLibrary: ActionLibraryItem[];
+}
+
+export function createConsultationSession(platform: PlatformDemo, input: ConsultationCreateInput): ConsultationSession {
+  const patient = platform.users.find((candidate) => candidate.id === input.patientUserId);
+  const clinician = platform.clinicians.find((candidate) => candidate.id === input.clinicianId);
+  if (!patient) {
+    throw new Error(`Unknown patient: ${input.patientUserId}`);
+  }
+  if (!clinician) {
+    throw new Error(`Unknown clinician: ${input.clinicianId}`);
+  }
+
+  const scheduledStartAt = requireCanonicalIso(input.scheduledStartAt, "scheduledStartAt");
+  const scheduledEndAt = requireCanonicalIso(input.scheduledEndAt, "scheduledEndAt");
+  if (new Date(scheduledStartAt).getTime() >= new Date(scheduledEndAt).getTime()) {
+    throw new Error("Consultation scheduledEndAt must be after scheduledStartAt");
+  }
+
+  const now = input.createdAt ? requireCanonicalIso(input.createdAt, "createdAt") : new Date().toISOString();
+  const session: ConsultationSession = {
+    id: `consult_${demoTokenId()}`,
+    patientUserId: input.patientUserId,
+    clinicianId: input.clinicianId,
+    caseId: input.caseId,
+    status: "scheduled",
+    paymentStatus: "paid",
+    scheduledStartAt,
+    scheduledEndAt,
+    durationMinutes: 15,
+    createdAt: now,
+  };
+  const authorization = buildCaseAuthorization({
+    caseId: input.caseId,
+    patientUserId: input.patientUserId,
+    clinicianId: input.clinicianId,
+    consultationSessionId: session.id,
+    scope: ["profile", "assessment_summary", "case_timeline", "current_plans", "chat_history"],
+    accessMode: ["read", "plan_create"],
+    startsAt: scheduledStartAt,
+    endsAt: addDaysIso(scheduledEndAt, 7),
+    createdAt: now,
+  });
+
+  platform.consultations = [session, ...platform.consultations.filter((candidate) => candidate.id !== session.id)];
+  platform.caseAuthorizations = [
+    authorization,
+    ...platform.caseAuthorizations.filter((candidate) => candidate.consultationSessionId !== session.id),
+  ];
+  platform.presence[session.id] = { patientPresent: false, clinicianPresent: false };
+  platform.consultationMessages = [
+    {
+      id: `msg_${demoTokenId()}`,
+      consultationSessionId: session.id,
+      senderId: "system",
+      senderRole: "system",
+      content: "问诊已预约成功，双方进入后开启 15 分钟实时聊天。",
+      kind: "system_notice",
+      createdAt: now,
+    },
+    ...platform.consultationMessages,
+  ];
+  return session;
+}
+
+export function getClinicianConsultations(platform: PlatformDemo, clinicianId: string): ConsultationSession[] {
+  return platform.consultations.filter((session) => session.clinicianId === clinicianId);
+}
+
+export function getConsultationSnapshot(
+  platform: PlatformDemo,
+  sessionId: string,
+  actorId: string,
+  actorRole: "user" | "clinician",
+  accessAt?: string,
+): ConsultationSnapshot {
+  const session = requireConsultation(platform, sessionId);
+  const authorization = requireAuthorization(platform, sessionId);
+  const actor =
+    actorRole === "user"
+      ? platform.users.find((candidate) => candidate.id === actorId)
+      : platform.clinicians.find((candidate) => candidate.id === actorId);
+  const authorizationCheckAt = accessAt ?? session.activatedAt ?? session.scheduledStartAt;
+  if (!actor || !canAccessAuthorizedCase(actor, authorization, session.caseId, authorizationCheckAt)) {
+    throw new Error("Consultation access denied");
+  }
+
+  return {
+    session,
+    authorization,
+    messages: platform.consultationMessages
+      .filter((message) => message.consultationSessionId === sessionId)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+    plans: platform.trainingPlans.filter(
+      (plan) => plan.caseId === session.caseId && plan.patientUserId === session.patientUserId,
+    ),
+    actionLibrary: platform.actionLibrary,
+  };
+}
+
+export function joinConsultationSession(
+  platform: PlatformDemo,
+  sessionId: string,
+  actorId: string,
+  actorRole: "user" | "clinician",
+  joinedAt = new Date().toISOString(),
+): ConsultationSession {
+  const session = requireConsultation(platform, sessionId);
+  const canonicalJoinedAt = requireCanonicalIso(joinedAt, "joinedAt");
+  if (actorRole === "user" && actorId !== session.patientUserId) {
+    throw new Error("Patient is not assigned to consultation");
+  }
+  if (actorRole === "clinician" && actorId !== session.clinicianId) {
+    throw new Error("Clinician is not assigned to consultation");
+  }
+
+  const presence = platform.presence[sessionId] ?? { patientPresent: false, clinicianPresent: false };
+  const nextPresence = {
+    patientPresent: presence.patientPresent || actorRole === "user",
+    clinicianPresent: presence.clinicianPresent || actorRole === "clinician",
+  };
+  platform.presence[sessionId] = nextPresence;
+
+  const nextSession =
+    nextPresence.patientPresent && nextPresence.clinicianPresent
+      ? activateConsultationSession(session, canonicalJoinedAt)
+      : { ...session, status: "waiting_clinician" as const };
+  replaceConsultation(platform, nextSession);
+  return nextSession;
+}
+
+export function sendConsultationMessage(
+  platform: PlatformDemo,
+  sessionId: string,
+  input: Pick<ConsultationMessage, "senderId" | "senderRole" | "content"> & { createdAt?: string },
+): ConsultationMessage {
+  const session = requireConsultation(platform, sessionId);
+  const createdAt = input.createdAt ? requireCanonicalIso(input.createdAt, "createdAt") : new Date().toISOString();
+  if (input.senderRole !== "system" && !canSendConsultationMessage(session, createdAt)) {
+    throw new Error("Consultation chat is not active");
+  }
+  if (input.senderRole === "user" && input.senderId !== session.patientUserId) {
+    throw new Error("Patient is not assigned to consultation");
+  }
+  if (input.senderRole === "clinician" && input.senderId !== session.clinicianId) {
+    throw new Error("Clinician is not assigned to consultation");
+  }
+
+  const message: ConsultationMessage = {
+    id: `msg_${demoTokenId()}`,
+    consultationSessionId: sessionId,
+    senderId: input.senderId,
+    senderRole: input.senderRole,
+    content: input.content.trim(),
+    kind: input.senderRole === "system" ? "system_notice" : "text",
+    createdAt,
+  };
+  platform.consultationMessages = [...platform.consultationMessages, message];
+  return message;
+}
+
+export function listActionLibrary(platform: PlatformDemo): ActionLibraryItem[] {
+  return platform.actionLibrary;
+}
+
+export interface ClinicianPlanInput {
+  title: string;
+  dayLabel: string;
+  actionIds: string[];
+  precautions: string[];
+  progressionCriteria: string[];
+  createdAt?: string;
+}
+
+export function createClinicianPlanForConsultation(
+  platform: PlatformDemo,
+  sessionId: string,
+  clinicianId: string,
+  input: ClinicianPlanInput,
+): TrainingPlan {
+  const session = requireConsultation(platform, sessionId);
+  const authorization = requireAuthorization(platform, sessionId);
+  const createdAt = input.createdAt ? requireCanonicalIso(input.createdAt, "createdAt") : new Date().toISOString();
+  const clinician = platform.clinicians.find((candidate) => candidate.id === clinicianId);
+  if (
+    !clinician ||
+    session.clinicianId !== clinicianId ||
+    !authorization.accessMode.includes("plan_create") ||
+    !canAccessAuthorizedCase(clinician, authorization, session.caseId, createdAt)
+  ) {
+    throw new Error("Clinician cannot create plan for consultation");
+  }
+
+  const actions = input.actionIds.map((id) => {
+    const action = platform.actionLibrary.find((candidate) => candidate.id === id);
+    if (!action) {
+      throw new Error(`Unknown action: ${id}`);
+    }
+    return action;
+  });
+  if (actions.length === 0) {
+    throw new Error("At least one action is required");
+  }
+
+  const plan = createTrainingPlan({
+    id: `plan_${demoTokenId()}`,
+    caseId: session.caseId,
+    patientUserId: session.patientUserId,
+    source: "clinician_custom",
+    authorId: clinicianId,
+    authorRole: "clinician",
+    status: "sent_to_patient",
+    title: input.title.trim(),
+    dayLabel: input.dayLabel.trim(),
+    items: actions.map((action) => ({ title: action.title, meta: action.defaultDosage, state: "todo" })),
+    stage: {
+      name: actions[0]?.phase ?? "康复训练",
+      progressLabel: input.dayLabel.trim(),
+      progressPercent: 10,
+      goals: actions.flatMap((action) => action.progressionCriteria).slice(0, 3),
+    },
+    precautions: input.precautions,
+    progressionCriteria: input.progressionCriteria,
+    createdAt,
+    sentAt: createdAt,
+  });
+
+  platform.trainingPlans = [plan, ...platform.trainingPlans.filter((candidate) => candidate.id !== plan.id)];
+  platform.consultationMessages = [
+    ...platform.consultationMessages,
+    {
+      id: `msg_${demoTokenId()}`,
+      consultationSessionId: sessionId,
+      senderId: clinicianId,
+      senderRole: "clinician",
+      content: `我给你发送了一份定制计划：${plan.title}`,
+      kind: "plan_offer",
+      createdAt,
+    },
+  ];
+  return plan;
+}
+
+export function acceptConsultationPlan(
+  platform: PlatformDemo,
+  planId: string,
+  patientUserId: string,
+  acceptedAt = new Date().toISOString(),
+): TrainingPlan {
+  const canonicalAcceptedAt = requireCanonicalIso(acceptedAt, "acceptedAt");
+  const plan = platform.trainingPlans.find((candidate) => candidate.id === planId);
+  if (!plan || plan.patientUserId !== patientUserId) {
+    throw new Error("Plan access denied");
+  }
+
+  const accepted = { ...plan, status: "accepted" as const, acceptedAt: canonicalAcceptedAt };
+  platform.trainingPlans = platform.trainingPlans.map((candidate) => (candidate.id === planId ? accepted : candidate));
+  rememberTrainingPlan(platform, patientUserId, {
+    id: accepted.id,
+    caseId: accepted.caseId,
+    categoryId: inferCategoryFromTrainingPlan(accepted),
+    title: accepted.title,
+    status: "active",
+    dayLabel: accepted.dayLabel,
+    completionPercent: accepted.stage.progressPercent,
+    items: accepted.items,
+    stage: accepted.stage,
+    updatedAt: canonicalAcceptedAt,
+  });
+  return accepted;
+}
+
+export function declineConsultationPlan(
+  platform: PlatformDemo,
+  planId: string,
+  patientUserId: string,
+): TrainingPlan {
+  const plan = platform.trainingPlans.find((candidate) => candidate.id === planId);
+  if (!plan || plan.patientUserId !== patientUserId) {
+    throw new Error("Plan access denied");
+  }
+
+  const declined = { ...plan, status: "declined" as const };
+  platform.trainingPlans = platform.trainingPlans.map((candidate) => (candidate.id === planId ? declined : candidate));
+  return declined;
+}
+
+function requireConsultation(platform: PlatformDemo, sessionId: string): ConsultationSession {
+  const session = platform.consultations.find((candidate) => candidate.id === sessionId);
+  if (!session) {
+    throw new Error(`Unknown consultation: ${sessionId}`);
+  }
+  return session;
+}
+
+function requireAuthorization(platform: PlatformDemo, sessionId: string): CaseAuthorization {
+  const authorization = platform.caseAuthorizations.find(
+    (candidate) => candidate.consultationSessionId === sessionId,
+  );
+  if (!authorization) {
+    throw new Error(`Missing authorization for consultation: ${sessionId}`);
+  }
+  return authorization;
+}
+
+function replaceConsultation(platform: PlatformDemo, session: ConsultationSession): void {
+  platform.consultations = platform.consultations.map((candidate) =>
+    candidate.id === session.id ? session : candidate,
+  );
+}
+
+function addDaysIso(value: string, days: number): string {
+  const date = new Date(value);
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function requireCanonicalIso(value: string, label: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime()) || date.toISOString() !== value) {
+    throw new Error(`${label} must be a canonical ISO timestamp`);
+  }
+  return value;
+}
+
+function inferCategoryFromTrainingPlan(_plan: TrainingPlan): RehabConsultCategory {
+  return "knee";
 }
 
 function demoTokenId(): string {
@@ -462,6 +989,11 @@ export class QwenChatClient {
       throw new Error("DASHSCOPE_API_KEY is required for Qwen chat.");
     }
 
+    const effectiveContext =
+      context.ragContext && context.ragContext.length > 0
+        ? context
+        : { ...context, ragContext: buildChatRagContext(messages, context.category) };
+
     const controller = new AbortController();
     let timedOut = false;
     const timeout = setTimeout(() => {
@@ -483,7 +1015,7 @@ export class QwenChatClient {
           messages: [
             {
               role: "system",
-              content: buildChatSystemPrompt(context),
+              content: buildChatSystemPrompt(effectiveContext),
             },
             ...messages,
           ],
@@ -512,7 +1044,7 @@ export class QwenChatClient {
       throw new Error("DashScope chat returned an empty response.");
     }
     return {
-      ...buildGuidedChatResponse(messages, context, content),
+      ...buildGuidedChatResponse(messages, effectiveContext, content),
       model: this.model,
     };
   }
@@ -586,21 +1118,7 @@ export function buildGuidedChatResponse(
   }
 
   if (category === "knee") {
-    if (isNegativeChoice(latestUserContent)) {
-      return {
-        content: "如果现在不能承重走路，需要先排除较重损伤。请暂停训练，优先线下评估。",
-        model: "guided-template",
-        assessmentStep: "knee_urgent_referral",
-      };
-    }
-
-    return {
-      content,
-      model: "guided-template",
-      assessmentStep: "knee_weight_bearing",
-      question: "现在能正常承重走路吗？",
-      options: yesNoUnsureOptions("knee_weight_bearing"),
-    };
+    return buildKneeGuidedChatResponse(messages, latestUserContent, content);
   }
 
   return {
@@ -628,7 +1146,10 @@ function initialGuidedContent(category: RehabConsultCategory | undefined, latest
       : "先从安全筛查开始，确认脚踝能不能承重。";
   }
   if (category === "knee") {
-    return "先确认一个安全问题，再决定是否适合继续做训练调整。";
+    if (shouldAskKneeWeightBearingFirst(latestUserContent)) {
+      return "先确认一个安全问题，再决定是否适合继续做训练调整。";
+    }
+    return "伸直时疼痛位置很关键。先把位置分清，再判断疼痛强度和诱发动作。";
   }
   return "我先帮你做一个简短安全筛查。";
 }
@@ -641,8 +1162,209 @@ function yesNoUnsureOptions(step: string): ChatOption[] {
   ];
 }
 
+function buildKneeGuidedChatResponse(
+  messages: ChatMessage[],
+  latestUserContent: string,
+  content: string,
+): GuidedChatResult {
+  const previousStep = latestAssistantAssessmentStep(messages);
+
+  if (previousStep === "knee_plan_offer") {
+    if (isAcceptChoice(latestUserContent)) {
+      return {
+        content: "已加入今日计划。先按低刺激方案执行，训练中疼痛控制在可接受范围，第二天不明显加重再推进。",
+        model: "guided-template",
+        assessmentStep: "knee_plan_accepted",
+        planPatch: buildConservativeKneePlanPatch(),
+      };
+    }
+    return {
+      content: "好的，先不加入计划。你可以继续补充疼痛变化，或等症状更稳定后再生成训练安排。",
+      model: "guided-template",
+      assessmentStep: "knee_plan_declined",
+    };
+  }
+
+  if (previousStep === "knee_training_load") {
+    return {
+      content:
+        "信息够做一个保守版起步方案了：先降低跑跳和下楼刺激，保留不加重疼痛的活动度与轻力量训练。",
+      model: "guided-template",
+      assessmentStep: "knee_plan_offer",
+      question: "要把这份膝盖保守运动处方加入今日计划吗？",
+      options: [
+        { id: "knee_plan_accept", label: "接受", value: "接受" },
+        { id: "knee_plan_decline", label: "先不接受", value: "先不接受" },
+      ],
+    };
+  }
+
+  if (previousStep === "knee_trigger") {
+    return {
+      content: "明白了。再确认训练背景，方便把建议限定在合适负荷。",
+      model: "guided-template",
+      assessmentStep: "knee_training_load",
+      question: "最近 7 天跑步、跳跃或下肢训练量有没有明显增加？",
+      options: [
+        { id: "knee_load_increased", label: "明显增加", value: "最近训练量明显增加" },
+        { id: "knee_load_same", label: "差不多", value: "最近训练量差不多" },
+        { id: "knee_load_decreased", label: "已经减少", value: "最近已经减少训练" },
+        { id: "knee_load_none", label: "基本没训练", value: "最近基本没训练" },
+      ],
+    };
+  }
+
+  if (previousStep === "knee_pain_score") {
+    return {
+      content: "收到。接下来确认诱发动作，这比单看疼痛分数更能帮助调整训练。",
+      model: "guided-template",
+      assessmentStep: "knee_trigger",
+      question: "哪个动作最容易诱发这次膝盖疼？",
+      options: [
+        { id: "knee_trigger_extension", label: "伸直膝盖", value: "伸直膝盖时疼" },
+        { id: "knee_trigger_stairs", label: "上下楼", value: "上下楼时疼" },
+        { id: "knee_trigger_squat", label: "深蹲", value: "深蹲时疼" },
+        { id: "knee_trigger_run", label: "跑步", value: "跑步时疼" },
+        { id: "knee_trigger_after", label: "运动后", value: "运动后疼" },
+      ],
+    };
+  }
+
+  if (previousStep === "knee_pain_location") {
+    return {
+      content: "位置先记下。现在用疼痛分数判断刺激强度。",
+      model: "guided-template",
+      assessmentStep: "knee_pain_score",
+      question: "按 0-10 分算，现在或诱发时大概几分？",
+      options: [
+        { id: "knee_score_mild", label: "0-3 分", value: "0-3 分" },
+        { id: "knee_score_moderate", label: "4-6 分", value: "4-6 分" },
+        { id: "knee_score_high", label: "7-10 分", value: "7-10 分" },
+        { id: "knee_score_unsure", label: "说不准", value: "疼痛分数说不准" },
+      ],
+    };
+  }
+
+  if (previousStep === "knee_weight_bearing") {
+    if (isNegativeChoice(latestUserContent)) {
+      return {
+        content: "如果现在不能承重走路，需要先排除较重损伤。请暂停训练，优先线下评估。",
+        model: "guided-template",
+        assessmentStep: "knee_urgent_referral",
+      };
+    }
+    return kneePainLocationStep(content, hasExtensionPain(messages));
+  }
+
+  if (mentionsCannotBearWeight(latestUserContent)) {
+    return {
+      content: "不能正常承重走路属于需要谨慎处理的信号。请先暂停训练，优先线下评估。",
+      model: "guided-template",
+      assessmentStep: "knee_urgent_referral",
+    };
+  }
+
+  if (shouldAskKneeWeightBearingFirst(latestUserContent)) {
+    return {
+      content,
+      model: "guided-template",
+      assessmentStep: "knee_weight_bearing",
+      question: "现在能正常承重走路吗？",
+      options: yesNoUnsureOptions("knee_weight_bearing"),
+    };
+  }
+
+  return kneePainLocationStep(content, hasExtensionPain(messages));
+}
+
+function kneePainLocationStep(content: string, extensionPain: boolean): GuidedChatResult {
+  return {
+    content,
+    model: "guided-template",
+    assessmentStep: "knee_pain_location",
+    question: extensionPain ? "伸直膝盖时，最明显疼痛位置在哪里？" : "现在膝盖最明显疼痛位置在哪里？",
+    options: [
+      { id: "knee_location_front", label: "膝盖前方", value: "膝盖前方疼" },
+      { id: "knee_location_back", label: "膝盖后方", value: "膝盖后方疼" },
+      { id: "knee_location_inside", label: "内侧", value: "膝盖内侧疼" },
+      { id: "knee_location_outside", label: "外侧", value: "膝盖外侧疼" },
+      { id: "knee_location_deep", label: "关节里面", value: "感觉在关节里面疼" },
+      { id: "knee_location_unsure", label: "说不清", value: "疼痛位置说不清" },
+    ],
+  };
+}
+
+function buildConservativeKneePlanPatch(): ChatPlanPatch {
+  return {
+    title: "膝盖保守恢复计划",
+    dayLabel: "第 1 天",
+    completionPercent: 0,
+    items: [
+      { title: "暂停跑跳与深蹲刺激", meta: "24-48 小时观察疼痛和肿胀反应", state: "todo" },
+      { title: "温和膝关节活动", meta: "坐姿伸屈或脚跟滑动 2 组，每组 10-12 次", state: "todo" },
+      { title: "低负荷股四头肌激活", meta: "无痛范围等长收缩 5 秒 x 8-10 次", state: "todo" },
+    ],
+    stage: {
+      name: "镇痛与负荷管理",
+      progressLabel: "起步观察期",
+      progressPercent: 12,
+      goals: ["疼痛不超过 3/10", "第二天不明显加重", "恢复可控伸直与日常步行"],
+    },
+  };
+}
+
+function latestAssistantAssessmentStep(messages: ChatMessage[]): string | undefined {
+  const latestAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+  if (!latestAssistant) {
+    return undefined;
+  }
+  if (latestAssistant.assessmentStep) {
+    return latestAssistant.assessmentStep;
+  }
+  const text = `${latestAssistant.content}\n${latestAssistant.question ?? ""}`;
+  if (/承重|走路/.test(text)) {
+    return "knee_weight_bearing";
+  }
+  if (/位置|哪里疼/.test(text)) {
+    return "knee_pain_location";
+  }
+  if (/几分|0-10|疼痛分数/.test(text)) {
+    return "knee_pain_score";
+  }
+  if (/诱发|动作/.test(text)) {
+    return "knee_trigger";
+  }
+  if (/训练量|最近 7 天/.test(text)) {
+    return "knee_training_load";
+  }
+  if (/加入今日计划|运动处方/.test(text)) {
+    return "knee_plan_offer";
+  }
+  return undefined;
+}
+
+function shouldAskKneeWeightBearingFirst(content: string): boolean {
+  return /摔|撞|扭|崴|外伤|受伤|肿|肿胀|积液|突然/.test(content);
+}
+
+function hasExtensionPain(messages: ChatMessage[]): boolean {
+  return messages.some((message) => message.role === "user" && /伸直|打直|伸膝/.test(message.content));
+}
+
+function mentionsCannotBearWeight(content: string): boolean {
+  return /(不能|无法|没法|走不了).{0,6}(承重|走路|走|站)|(?:承重|走路|站).{0,6}(不能|无法|没法)/.test(content);
+}
+
+function isAcceptChoice(content: string): boolean {
+  return /接受|加入|可以|确认|同意/.test(content);
+}
+
 function isNegativeChoice(content: string): boolean {
   return /不能|不行|走不了|无法/.test(content);
+}
+
+function isAcceptedPrescriptionStatus(status: string): boolean {
+  return /处方已接受|已接受运动处方|计划已接受/.test(status);
 }
 
 function buildLocalSafetyResponse(messages: ChatMessage[], context: ChatContext): GuidedChatResult | null {
@@ -655,6 +1377,9 @@ function buildLocalSafetyResponse(messages: ChatMessage[], context: ChatContext)
     };
   }
   if (context.category === "ankle" && isAcuteAnkleScreening(latestUserContent)) {
+    return buildGuidedChatResponse(messages, context);
+  }
+  if (context.category === "knee" && isKneeGuidedAssessment(messages, latestUserContent)) {
     return buildGuidedChatResponse(messages, context);
   }
   if (!isNegativeChoice(latestUserContent)) {
@@ -670,6 +1395,15 @@ function isAcuteAnkleScreening(content: string): boolean {
   return /崴脚|扭伤|扭了|肿/.test(content);
 }
 
+function isKneeGuidedAssessment(messages: ChatMessage[], latestUserContent: string): boolean {
+  return Boolean(
+    latestAssistantAssessmentStep(messages) ||
+      /膝|伸直|打直|伸膝|上下楼|下楼|深蹲|跑步|跑后|髌|半月板|前方疼|后方疼|内侧疼|外侧疼/.test(
+        latestUserContent,
+      ),
+  );
+}
+
 function isModelIdentityQuestion(content: string): boolean {
   return /什么.*模型|哪个.*模型|模型.*来源|底层.*模型|用.*模型|供应商|千问|Qwen|DashScope|OpenAI|DeepSeek/i.test(content);
 }
@@ -683,6 +1417,151 @@ function formatRagContext(snippets: RagEvidenceSnippet[]): string {
       return `${index + 1}. ${snippet.source}${page}\n${snippet.text.trim()}`;
     })
     .join("\n\n");
+}
+
+export interface LocalRagSearchOptions {
+  indexPath?: string;
+  topK?: number;
+}
+
+type LocalRagChunk = {
+  id: string;
+  source: string;
+  text: string;
+  metadata?: Record<string, unknown>;
+};
+
+type LoadedLocalRagIndex = {
+  chunks: LocalRagChunk[];
+  chunkTerms: Map<string, number>[];
+  docFreq: Map<string, number>;
+};
+
+const DEFAULT_RAG_INDEX_PATH = "/Users/rez/Documents/RAG/rag/data/rehab_books_index.json";
+const loadedRagIndexes = new Map<string, LoadedLocalRagIndex>();
+
+export function buildChatRagContext(
+  messages: ChatMessage[],
+  category?: RehabConsultCategory,
+  options: LocalRagSearchOptions = {},
+): RagEvidenceSnippet[] {
+  if (category !== "knee") {
+    return [];
+  }
+  const latestUserMessage = [...messages].reverse().find((message) => message.role === "user");
+  const query = [
+    latestUserMessage?.content ?? "",
+    "knee patellofemoral pain extension extensor load exercise rehabilitation",
+  ]
+    .join(" ")
+    .trim();
+  return searchLocalRag(query, options);
+}
+
+export function searchLocalRag(query: string, options: LocalRagSearchOptions = {}): RagEvidenceSnippet[] {
+  const topK = options.topK ?? 4;
+  if (topK <= 0 || !query.trim()) {
+    return [];
+  }
+  const indexPath = options.indexPath ?? process.env.MENTIS_RAG_INDEX_PATH ?? DEFAULT_RAG_INDEX_PATH;
+  if (!existsSync(indexPath)) {
+    return [];
+  }
+
+  const index = loadLocalRagIndex(indexPath);
+  const queryTerms = termCounts(tokenizeForLocalRag(query));
+  const queryVector = tfidfVector(queryTerms, index.docFreq, index.chunks.length);
+  const queryNorm = vectorNorm(queryVector);
+  if (queryNorm === 0) {
+    return [];
+  }
+
+  return index.chunks
+    .map((chunk, indexNumber) => {
+      const chunkVector = tfidfVector(index.chunkTerms[indexNumber], index.docFreq, index.chunks.length);
+      const chunkNorm = vectorNorm(chunkVector);
+      const score = chunkNorm === 0 ? 0 : dotProduct(queryVector, chunkVector) / (queryNorm * chunkNorm);
+      return { chunk, score };
+    })
+    .filter((result) => result.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, topK)
+    .map(({ chunk, score }) => ({
+      source: String(chunk.metadata?.file ?? chunk.source),
+      page: typeof chunk.metadata?.page === "string" || typeof chunk.metadata?.page === "number" ? chunk.metadata.page : undefined,
+      text: chunk.text,
+      score,
+      evidenceType: typeof chunk.metadata?.evidence_type === "string" ? chunk.metadata.evidence_type : undefined,
+    }));
+}
+
+function loadLocalRagIndex(indexPath: string): LoadedLocalRagIndex {
+  const cached = loadedRagIndexes.get(indexPath);
+  if (cached) {
+    return cached;
+  }
+  const payload = JSON.parse(readFileSync(indexPath, "utf-8")) as { chunks?: LocalRagChunk[] };
+  const chunks = Array.isArray(payload.chunks) ? payload.chunks : [];
+  const docFreq = new Map<string, number>();
+  const chunkTerms = chunks.map((chunk) => {
+    const terms = termCounts(tokenizeForLocalRag(searchableRagChunkText(chunk)));
+    for (const term of terms.keys()) {
+      docFreq.set(term, (docFreq.get(term) ?? 0) + 1);
+    }
+    return terms;
+  });
+  const loaded = { chunks, chunkTerms, docFreq };
+  loadedRagIndexes.set(indexPath, loaded);
+  return loaded;
+}
+
+function searchableRagChunkText(chunk: LocalRagChunk): string {
+  const metadataText = Object.values(chunk.metadata ?? {})
+    .filter(Boolean)
+    .join(" ");
+  return `${chunk.source}\n${metadataText}\n${chunk.text}`;
+}
+
+function tokenizeForLocalRag(text: string): string[] {
+  const rawTokens = text.toLowerCase().match(/[a-zA-Z0-9_]+|[\u4e00-\u9fff]/gu) ?? [];
+  const cjkChars = rawTokens.filter((token) => token.length === 1 && token >= "\u4e00" && token <= "\u9fff");
+  const cjkBigrams = cjkChars.slice(0, -1).map((token, index) => `${token}${cjkChars[index + 1]}`);
+  return [...rawTokens, ...cjkBigrams];
+}
+
+function termCounts(tokens: string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const token of tokens) {
+    counts.set(token, (counts.get(token) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function tfidfVector(terms: Map<string, number>, docFreq: Map<string, number>, docCount: number): Map<string, number> {
+  const total = Array.from(terms.values()).reduce((sum, value) => sum + value, 0);
+  const vector = new Map<string, number>();
+  if (total === 0) {
+    return vector;
+  }
+  for (const [term, count] of terms.entries()) {
+    const tf = count / total;
+    const idf = Math.log((docCount + 1) / ((docFreq.get(term) ?? 0) + 1)) + 1;
+    vector.set(term, tf * idf);
+  }
+  return vector;
+}
+
+function vectorNorm(vector: Map<string, number>): number {
+  return Math.sqrt(Array.from(vector.values()).reduce((sum, value) => sum + value * value, 0));
+}
+
+function dotProduct(left: Map<string, number>, right: Map<string, number>): number {
+  const [small, large] = left.size <= right.size ? [left, right] : [right, left];
+  let total = 0;
+  for (const [term, value] of small.entries()) {
+    total += value * (large.get(term) ?? 0);
+  }
+  return total;
 }
 
 function loadLocalEnv() {

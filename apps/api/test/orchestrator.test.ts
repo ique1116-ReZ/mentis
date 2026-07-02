@@ -1,12 +1,29 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
+  acceptConsultationPlan,
   authenticateDemoUser,
   buildChatSystemPrompt,
+  buildChatRagContext,
   buildGuidedChatResponse,
   chatWithQwen,
+  createClinicianPlanForConsultation,
+  createConsultationSession,
   createPlatformDemo,
+  deleteRememberedCase,
+  declineConsultationPlan,
+  getClinicianConsultations,
+  getConsultationSnapshot,
+  joinConsultationSession,
+  listActionLibrary,
+  rememberCase,
+  rememberTrainingPlan,
   registerDemoUser,
   runAssessmentWorkflow,
+  searchLocalRag,
+  sendConsultationMessage,
   QwenChatClient,
   resolveCorsOrigin,
   type RehabConsultCategory,
@@ -59,50 +76,242 @@ describe("business API orchestration", () => {
 });
 
 describe("auth and registration", () => {
-  it("only allows ique1116 to register with profile data", () => {
+  it("allows registration for any username with the invite code and basic body metrics", () => {
     const platform = createPlatformDemo();
 
     const session = registerDemoUser(platform, {
-      username: "ique1116",
+      username: "new_runner",
       password: "secret",
       displayName: "ReZ",
+      inviteCode: "ique1116",
       heightCm: "175",
       weightKg: "68",
-      sportLevel: "中级跑者",
-      weeklyFrequency: "4-5 次",
-      primaryGoal: "安全恢复跑步",
     });
 
-    expect(session.user.id).toBe("user_ique1116");
+    expect(session.user.id).toBe("user_new_runner");
     expect(session.user.displayName).toBe("ReZ");
     expect(session.user.profile).toMatchObject({
       heightCm: "175",
       weightKg: "68",
-      sportLevel: "中级跑者",
-      weeklyFrequency: "4-5 次",
-      primaryGoal: "安全恢复跑步",
     });
-    expect(session.memory.notes).toContain("中级跑者，每周训练 4-5 次，目标是安全恢复跑步。");
+    expect(session.user.profile).not.toHaveProperty("sportLevel");
+    expect(session.user.profile).not.toHaveProperty("weeklyFrequency");
+    expect(session.user.profile).not.toHaveProperty("primaryGoal");
+    expect(session.memory.notes).toEqual([]);
 
-    const loginSession = authenticateDemoUser(platform, { username: "ique1116", password: "secret" });
-    expect(loginSession.user.id).toBe("user_ique1116");
+    const loginSession = authenticateDemoUser(platform, { username: "new_runner", password: "secret" });
+    expect(loginSession.user.id).toBe("user_new_runner");
   });
 
-  it("rejects registration for non-allowlisted usernames", () => {
+  it("rejects registration without the required invite code", () => {
     const platform = createPlatformDemo();
 
     expect(() =>
       registerDemoUser(platform, {
-        username: "someone_else",
+        username: "someone",
         password: "secret",
         displayName: "Other",
+        inviteCode: "wrong-code",
         heightCm: "180",
         weightKg: "72",
-        sportLevel: "初级",
-        weeklyFrequency: "2 次",
-        primaryGoal: "恢复训练",
       }),
-    ).toThrow("Registration is currently limited to ique1116");
+    ).toThrow("Invalid invite code");
+  });
+});
+
+describe("consultation orchestration", () => {
+  it("authenticates a demo clinician into the clinician role", () => {
+    const platform = createPlatformDemo();
+
+    const session = authenticateDemoUser(platform, {
+      username: "clinician_demo",
+      password: "mentis_clinician",
+    });
+
+    expect(session.user.id).toBe("clinician_1");
+    expect(session.user.role).toBe("clinician");
+    expect(session.user.displayName).toBe("李康复师");
+    expect(session.memory.cases).toEqual([]);
+    expect(session.memory.trainingPlans).toEqual([]);
+  });
+
+  it("registers patients and pending clinicians through the same auth endpoint", () => {
+    const platform = createPlatformDemo();
+
+    const patient = registerDemoUser(platform, {
+      username: "patient_new",
+      password: "secret",
+      displayName: "新患者",
+      inviteCode: "ique1116",
+      heightCm: "176",
+      weightKg: "70",
+    });
+
+    const clinician = registerDemoUser(platform, {
+      accountRole: "clinician",
+      username: "clinician_new",
+      password: "secret",
+      displayName: "新康复师",
+      inviteCode: "ique1116",
+      heightCm: "",
+      weightKg: "",
+      discipline: "运动康复师",
+      credentialSummary: "三年跑步损伤康复经验",
+      specialties: [" knee ", "running", ""],
+      organizationName: "个人执业",
+    });
+
+    expect(patient.user.role).toBe("user");
+    expect(clinician.user.role).toBe("clinician");
+    expect(clinician.user).toMatchObject({
+      credentialStatus: "pending",
+      specialties: ["knee", "running"],
+    });
+    expect(clinician.memory.notes).toEqual([]);
+    expect(getClinicianConsultations(platform, clinician.user.id)).toHaveLength(0);
+  });
+
+  it("creates paid sessions and shows clinicians only their assigned consultations", () => {
+    const platform = createPlatformDemo();
+    const session = createConsultationSession(platform, {
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      caseId: "case_demo",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+    });
+
+    expect(session.paymentStatus).toBe("paid");
+    expect(session.durationMinutes).toBe(15);
+    expect(getClinicianConsultations(platform, "clinician_1").map((candidate) => candidate.id)).toEqual([
+      session.id,
+    ]);
+    expect(getClinicianConsultations(platform, "clinician_missing")).toHaveLength(0);
+  });
+
+  it("activates chat only after clinician and patient join, then validates message timestamps", () => {
+    const platform = createPlatformDemo();
+    const session = createConsultationSession(platform, {
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      caseId: "case_demo",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+    });
+
+    const patientWaiting = joinConsultationSession(platform, session.id, "user_1", "user", "2026-07-02T02:01:00.000Z");
+    expect(patientWaiting.status).toBe("waiting_clinician");
+    expect(() =>
+      sendConsultationMessage(platform, session.id, {
+        senderId: "user_1",
+        senderRole: "user",
+        content: "先发一条会被拦截。",
+        createdAt: "2026-07-02T02:01:30.000Z",
+      }),
+    ).toThrow("Consultation chat is not active");
+
+    const active = joinConsultationSession(
+      platform,
+      session.id,
+      "clinician_1",
+      "clinician",
+      "2026-07-02T02:02:00.000Z",
+    );
+    expect(active.status).toBe("active");
+    expect(active.expiresAt).toBe("2026-07-02T02:17:00.000Z");
+
+    const message = sendConsultationMessage(platform, session.id, {
+      senderId: "user_1",
+      senderRole: "user",
+      content: "我今天下楼还是疼。",
+      createdAt: "2026-07-02T02:03:00.000Z",
+    });
+    expect(message.content).toContain("下楼");
+
+    expect(() =>
+      sendConsultationMessage(platform, session.id, {
+        senderId: "clinician_1",
+        senderRole: "clinician",
+        content: "超时消息不应发送。",
+        createdAt: "2026-07-02T02:17:00.000Z",
+      }),
+    ).toThrow("Consultation chat is not active");
+  });
+
+  it("lets a clinician send, accept, and decline plans without deleting source-separated plans", () => {
+    const platform = createPlatformDemo();
+    const session = createConsultationSession(platform, {
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      caseId: "case_demo",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+    });
+
+    platform.trainingPlans.push({
+      id: "plan_ai_existing",
+      caseId: "case_demo",
+      patientUserId: "user_1",
+      source: "ai_generated",
+      authorId: "assistant",
+      authorRole: "assistant",
+      status: "accepted",
+      title: "AI 膝盖保守计划",
+      dayLabel: "第 1 天",
+      items: [{ title: "等长伸膝", meta: "3 组 x 30 秒", state: "todo" }],
+      stage: {
+        name: "镇痛与负荷管理",
+        progressLabel: "第 1 周",
+        progressPercent: 10,
+        goals: ["疼痛可控"],
+      },
+      precautions: ["疼痛超过 3/10 时停止"],
+      progressionCriteria: ["24 小时内无明显加重"],
+      createdAt: "2026-07-02T02:00:00.000Z",
+      acceptedAt: "2026-07-02T02:01:00.000Z",
+    });
+
+    const [action, declineAction] = listActionLibrary(platform);
+    expect(action.bodyRegion).toBe("knee");
+
+    const plan = createClinicianPlanForConsultation(platform, session.id, "clinician_1", {
+      title: "康复师定制膝前痛计划",
+      dayLabel: "第 1 天",
+      actionIds: [action.id],
+      precautions: ["训练中疼痛超过 3/10 时停止"],
+      progressionCriteria: ["24 小时内无明显加重"],
+      createdAt: "2026-07-02T02:12:00.000Z",
+    });
+    const declinedPlan = createClinicianPlanForConsultation(platform, session.id, "clinician_1", {
+      title: "可选负荷进阶计划",
+      dayLabel: "第 2 天",
+      actionIds: [declineAction.id],
+      precautions: ["急性肿胀时暂停"],
+      progressionCriteria: ["可完成 4 组且次日无加重"],
+      createdAt: "2026-07-02T02:13:00.000Z",
+    });
+
+    expect(plan.status).toBe("sent_to_patient");
+    expect(plan.source).toBe("clinician_custom");
+    expect(declineConsultationPlan(platform, declinedPlan.id, "user_1").status).toBe("declined");
+
+    const accepted = acceptConsultationPlan(platform, plan.id, "user_1", "2026-07-02T02:20:00.000Z");
+    const snapshot = getConsultationSnapshot(
+      platform,
+      session.id,
+      "user_1",
+      "user",
+      "2026-07-04T02:20:00.000Z",
+    );
+
+    expect(accepted.status).toBe("accepted");
+    expect(snapshot.plans.map((candidate) => candidate.id)).toEqual(
+      expect.arrayContaining(["plan_ai_existing", plan.id, declinedPlan.id]),
+    );
+    expect(snapshot.plans.find((candidate) => candidate.id === "plan_ai_existing")?.source).toBe("ai_generated");
+    expect(snapshot.plans.find((candidate) => candidate.id === plan.id)?.source).toBe("clinician_custom");
+    expect(snapshot.messages.some((message) => message.kind === "plan_offer")).toBe(true);
+    expect(snapshot.actionLibrary).toHaveLength(2);
   });
 });
 
@@ -141,6 +350,81 @@ describe("Qwen chat client", () => {
     expect(guided.question).toBe("现在能正常承重走路吗？");
     expect(guided.options?.map((option) => option.label)).toEqual(["能", "不能", "不确定"]);
     expect(guided.content.split("\n").filter(Boolean).length).toBeLessThanOrEqual(2);
+  });
+
+  it("asks knee pain location first when the complaint is non-traumatic extension pain", () => {
+    const guided = buildGuidedChatResponse(
+      [{ role: "user", content: "膝盖伸直的时候疼" }],
+      { category: "knee" },
+      "我先确认伸直时疼痛的具体位置。",
+    );
+
+    expect(guided.assessmentStep).toBe("knee_pain_location");
+    expect(guided.question).toBe("伸直膝盖时，最明显疼痛位置在哪里？");
+    expect(guided.options?.map((option) => option.label)).toEqual([
+      "膝盖前方",
+      "膝盖后方",
+      "内侧",
+      "外侧",
+      "关节里面",
+      "说不清",
+    ]);
+  });
+
+  it("advances knee flow from weight-bearing answer to pain location options", () => {
+    const guided = buildGuidedChatResponse(
+      [
+        { role: "user", content: "膝盖摔了一下，现在伸直疼" },
+        {
+          role: "assistant",
+          content: "先确认一个安全问题。",
+          assessmentStep: "knee_weight_bearing",
+          question: "现在能正常承重走路吗？",
+        },
+        { role: "user", content: "能" },
+      ],
+      { category: "knee" },
+      "好的，能伸直说明关节活动度还可以。那请问你伸直膝盖时，具体是哪里疼呢？",
+    );
+
+    expect(guided.assessmentStep).toBe("knee_pain_location");
+    expect(guided.question).toBe("伸直膝盖时，最明显疼痛位置在哪里？");
+    expect(guided.options?.map((option) => option.label)).toContain("膝盖前方");
+    expect(guided.options?.map((option) => option.label)).not.toEqual(["能", "不能", "不确定"]);
+  });
+
+  it("offers a structured knee plan only after enough guided answers, then patches plan on acceptance", () => {
+    const offer = buildGuidedChatResponse(
+      [
+        { role: "user", content: "膝盖伸直的时候疼" },
+        { role: "assistant", content: "位置在哪里？", assessmentStep: "knee_pain_location" },
+        { role: "user", content: "膝盖前方" },
+        { role: "assistant", content: "疼痛评分？", assessmentStep: "knee_pain_score" },
+        { role: "user", content: "4-6 分" },
+        { role: "assistant", content: "哪些动作诱发？", assessmentStep: "knee_trigger" },
+        { role: "user", content: "伸直和下楼疼" },
+        { role: "assistant", content: "最近训练量？", assessmentStep: "knee_training_load" },
+        { role: "user", content: "最近跑量增加了" },
+      ],
+      { category: "knee" },
+    );
+
+    expect(offer.assessmentStep).toBe("knee_plan_offer");
+    expect(offer.question).toBe("要把这份膝盖保守运动处方加入今日计划吗？");
+    expect(offer.options?.map((option) => option.label)).toEqual(["接受", "先不接受"]);
+    expect(offer.planPatch).toBeUndefined();
+
+    const accepted = buildGuidedChatResponse(
+      [
+        { role: "assistant", content: "要加入今日计划吗？", assessmentStep: "knee_plan_offer" },
+        { role: "user", content: "接受" },
+      ],
+      { category: "knee" },
+    );
+
+    expect(accepted.assessmentStep).toBe("knee_plan_accepted");
+    expect(accepted.planPatch?.title).toContain("膝盖");
+    expect(accepted.planPatch?.items?.length).toBeGreaterThan(0);
   });
 
   it("does not create plan patches when red flag answers require offline assessment", () => {
@@ -195,7 +479,7 @@ describe("Qwen chat client", () => {
     await expect(client.chat([{ role: "user", content: "你好" }])).rejects.toThrow("DASHSCOPE_API_KEY");
   });
 
-  it("scopes answers to the selected rehab category without pretending RAG is enabled", async () => {
+  it("scopes answers to the selected rehab category and uses provided RAG evidence", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetcher = async (url: string | URL | Request, init?: RequestInit) => {
       calls.push({ url: String(url), init: init ?? {} });
@@ -206,7 +490,16 @@ describe("Qwen chat client", () => {
     };
     const client = new QwenChatClient({ apiKey: "secret-key", fetcher });
 
-    await client.chat([{ role: "user", content: "肩膀也疼，可以一起问吗？" }], { category: "knee" });
+    await client.chat([{ role: "user", content: "肩膀也疼，可以一起问吗？" }], {
+      category: "knee",
+      ragContext: [
+        {
+          source: "Patellofemoral Pain 2019 LOGO.pdf",
+          page: 20,
+          text: "Exercise therapy and load management are recommended.",
+        },
+      ],
+    });
 
     const body = JSON.parse(String(calls[0].init.body)) as {
       messages: Array<{ role: string; content: string }>;
@@ -214,7 +507,8 @@ describe("Qwen chat client", () => {
     const systemPrompt = body.messages[0].content;
     expect(systemPrompt).toContain("当前咨询类别：膝盖");
     expect(systemPrompt).toContain("只围绕膝盖");
-    expect(systemPrompt).toContain("不要编造 RAG 引用");
+    expect(systemPrompt).toContain("可用 RAG 证据");
+    expect(systemPrompt).toContain("Patellofemoral Pain 2019 LOGO.pdf, page 20");
   });
 
   it("can receive future RAG snippets in the chat context", async () => {
@@ -291,6 +585,29 @@ describe("Qwen chat client", () => {
     expect(result.options?.map((option) => option.label)).toEqual(["能", "不能", "不确定"]);
   });
 
+  it("returns local guided knee assessment options without waiting for the model", async () => {
+    let fetchCalls = 0;
+    const fetcher = async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "模型不应被调用" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const result = await chatWithQwen(
+      [{ role: "user", content: "膝盖伸直的时候疼" }],
+      { category: "knee" },
+      { apiKey: "", fetcher },
+    );
+
+    expect(fetchCalls).toBe(0);
+    expect(result.content).toContain("疼痛位置");
+    expect(result.assessmentStep).toBe("knee_pain_location");
+    expect(result.question).toBe("伸直膝盖时，最明显疼痛位置在哪里？");
+    expect(result.options?.map((option) => option.label)).toContain("膝盖前方");
+  });
+
   it("returns local urgent guidance for red flag option answers without waiting for the model", async () => {
     let fetchCalls = 0;
     const fetcher = async () => {
@@ -347,6 +664,160 @@ describe("Qwen chat client", () => {
 
     await expect(client.chat([{ role: "user", content: "你好" }], { category: "ankle" })).rejects.toThrow(
       "DashScope chat timed out",
+    );
+  });
+});
+
+describe("local RAG integration", () => {
+  it("retrieves knee evidence from a local RAG index for chat context", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mentis-rag-"));
+    const indexPath = join(dir, "index.json");
+    writeFileSync(
+      indexPath,
+      JSON.stringify({
+        version: 1,
+        chunks: [
+          {
+            id: "ankle",
+            source: "NATA ankle.pdf",
+            text: "Acute ankle sprain should screen weight bearing.",
+            start: 0,
+            end: 52,
+            metadata: { file: "NATA ankle.pdf", page: "4", title: "Ankle Guideline" },
+          },
+          {
+            id: "knee",
+            source: "Patellofemoral Pain 2019 LOGO.pdf",
+            text: "Knee patellofemoral pain management uses exercise therapy and load management.",
+            start: 0,
+            end: 82,
+            metadata: {
+              file: "Patellofemoral Pain 2019 LOGO.pdf",
+              page: "20",
+              title: "Patellofemoral Pain Guideline",
+              evidence_type: "clinical_practice_guideline",
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const results = searchLocalRag("膝盖前方疼痛 exercise load", { indexPath, topK: 1 });
+
+    expect(results[0]).toMatchObject({
+      source: "Patellofemoral Pain 2019 LOGO.pdf",
+      page: "20",
+    });
+    expect(results[0].text).toContain("load management");
+  });
+
+  it("builds chat RAG context from the latest user knee question", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mentis-rag-"));
+    const indexPath = join(dir, "index.json");
+    writeFileSync(
+      indexPath,
+      JSON.stringify({
+        version: 1,
+        chunks: [
+          {
+            id: "knee",
+            source: "Front_Rehabil_Sci_2025_patellofemoral_pain_knee_extensor_training_review.pdf",
+            text: "Knee extensor training can improve patellofemoral pain when progressed by symptoms.",
+            start: 0,
+            end: 95,
+            metadata: { file: "knee_extensor_review.pdf", page: "3" },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const context = buildChatRagContext([{ role: "user", content: "膝盖伸直的时候疼" }], "knee", {
+      indexPath,
+      topK: 1,
+    });
+
+    expect(context).toHaveLength(1);
+    expect(context[0].text).toContain("Knee extensor training");
+  });
+});
+
+describe("case memory deletion", () => {
+  it("allows deleting draft consultation cases but locks accepted prescription cases", () => {
+    const platform = createPlatformDemo();
+    const userId = "user_1";
+    platform.userMemories[userId].cases = [
+      {
+        id: "draft_case",
+        categoryId: "knee",
+        title: "伸直膝盖疼",
+        summary: "待评估",
+        status: "咨询中",
+        createdAt: "07/01 10:21",
+      },
+      {
+        id: "accepted_case",
+        categoryId: "knee",
+        title: "膝前痛计划",
+        summary: "已接受运动处方",
+        status: "运动处方已接受",
+        createdAt: "07/01 10:30",
+      },
+    ];
+
+    const afterDelete = deleteRememberedCase(platform, userId, "draft_case");
+    expect(afterDelete.cases.map((patientCase) => patientCase.id)).toEqual(["accepted_case"]);
+
+    expect(() => deleteRememberedCase(platform, userId, "accepted_case")).toThrow(
+      "Accepted prescription cases cannot be deleted",
+    );
+  });
+});
+
+describe("training plan memory", () => {
+  it("stores accepted exercise prescriptions in backend memory and locks the source case", () => {
+    const platform = createPlatformDemo();
+    const userId = "user_1";
+
+    rememberCase(platform, userId, {
+      id: "case_knee_1",
+      categoryId: "knee",
+      title: "膝盖伸直疼",
+      summary: "膝盖前方疼，4-6 分",
+      status: "咨询中",
+      createdAt: "07/02 11:10",
+    });
+
+    const memory = rememberTrainingPlan(platform, userId, {
+      id: "plan_case_knee_1",
+      caseId: "case_knee_1",
+      categoryId: "knee",
+      title: "膝盖保守恢复计划",
+      status: "active",
+      dayLabel: "第 1 天",
+      completionPercent: 0,
+      items: [{ title: "温和膝关节活动", meta: "2 组 x 10 次", state: "todo" }],
+      stage: {
+        name: "镇痛与负荷管理",
+        progressLabel: "起步观察期",
+        progressPercent: 12,
+        goals: ["疼痛不超过 3/10"],
+      },
+    });
+
+    expect(memory.trainingPlans).toHaveLength(1);
+    expect(memory.trainingPlans[0]).toMatchObject({
+      id: "plan_case_knee_1",
+      caseId: "case_knee_1",
+      title: "膝盖保守恢复计划",
+      status: "active",
+    });
+    expect(memory.cases.find((patientCase) => patientCase.id === "case_knee_1")?.status).toBe(
+      "运动处方已接受",
+    );
+    expect(() => deleteRememberedCase(platform, userId, "case_knee_1")).toThrow(
+      "Accepted prescription cases cannot be deleted",
     );
   });
 });
