@@ -21,6 +21,7 @@ import {
   rememberCase,
   rememberTrainingPlan,
   registerDemoUser,
+  resolveAuthenticatedActor,
   runAssessmentWorkflow,
   searchLocalRag,
   sendConsultationMessage,
@@ -102,6 +103,7 @@ describe("auth and registration", () => {
 
     const loginSession = authenticateDemoUser(platform, { username: "new_runner", password: "secret" });
     expect(loginSession.user.id).toBe("user_new_runner");
+    expect(resolveAuthenticatedActor(platform, session.token).id).toBe("user_new_runner");
   });
 
   it("rejects registration without the required invite code", () => {
@@ -148,6 +150,32 @@ describe("consultation orchestration", () => {
     expect(session.user.displayName).toBe("李康复师");
     expect(session.memory.cases).toEqual([]);
     expect(session.memory.trainingPlans).toEqual([]);
+  });
+
+  it("resolves demo tokens to fresh actors and rejects unknown tokens", () => {
+    const platform = createPlatformDemo();
+    const session = authenticateDemoUser(platform, {
+      username: "clinician_demo",
+      password: "mentis_clinician",
+    });
+
+    expect(resolveAuthenticatedActor(platform, session.token)).toMatchObject({
+      id: "clinician_1",
+      credentialStatus: "verified",
+    });
+
+    platform.clinicians = platform.clinicians.map((clinician) =>
+      clinician.id === "clinician_1"
+        ? { ...clinician, displayName: "已更新康复师", credentialStatus: "rejected" }
+        : clinician,
+    );
+
+    expect(resolveAuthenticatedActor(platform, session.token)).toMatchObject({
+      id: "clinician_1",
+      displayName: "已更新康复师",
+      credentialStatus: "rejected",
+    });
+    expect(() => resolveAuthenticatedActor(platform, "demo_missing")).toThrow("Invalid or expired demo session");
   });
 
   it("registers patients and pending clinicians through the same auth endpoint", () => {
@@ -228,8 +256,70 @@ describe("consultation orchestration", () => {
     expect(getClinicianConsultations(platform, "clinician_missing")).toHaveLength(0);
   });
 
+  it("uses resolved token actors for route-facing joins, messages, and snapshots", () => {
+    const platform = createPlatformDemo();
+    const patientSession = registerDemoUser(platform, {
+      username: "route_patient",
+      password: "secret",
+      displayName: "路由患者",
+      inviteCode: "ique1116",
+      heightCm: "176",
+      weightKg: "70",
+    });
+    const clinicianSession = authenticateDemoUser(platform, {
+      username: "clinician_demo",
+      password: "mentis_clinician",
+    });
+    const patientActor = resolveAuthenticatedActor(platform, patientSession.token);
+    const clinicianActor = resolveAuthenticatedActor(platform, clinicianSession.token);
+    const session = createConsultationSession(platform, {
+      patientUserId: patientActor.id,
+      clinicianId: clinicianActor.id,
+      caseId: "case_route_actor",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+    });
+
+    expect(joinConsultationSession(platform, session.id, patientActor, "2026-07-02T02:01:00.000Z").status).toBe(
+      "waiting_clinician",
+    );
+    expect(joinConsultationSession(platform, session.id, clinicianActor, "2026-07-02T02:02:00.000Z").status).toBe(
+      "active",
+    );
+
+    const patientMessage = sendConsultationMessage(platform, session.id, patientActor, {
+      content: "我今天走路有点疼。",
+      createdAt: "2026-07-02T02:03:00.000Z",
+    });
+    const clinicianMessage = sendConsultationMessage(platform, session.id, clinicianActor, {
+      content: "先把下楼量降下来。",
+      createdAt: "2026-07-02T02:04:00.000Z",
+    });
+    const patientSnapshot = getConsultationSnapshot(
+      platform,
+      session.id,
+      patientActor,
+      "2026-07-02T02:05:00.000Z",
+    );
+    const clinicianSnapshot = getConsultationSnapshot(
+      platform,
+      session.id,
+      clinicianActor,
+      "2026-07-02T02:05:00.000Z",
+    );
+
+    expect(patientMessage.senderId).toBe(patientActor.id);
+    expect(clinicianMessage.senderId).toBe(clinicianActor.id);
+    expect(patientSnapshot.session.id).toBe(session.id);
+    expect(clinicianSnapshot.messages.map((message) => message.id)).toEqual(
+      expect.arrayContaining([patientMessage.id, clinicianMessage.id]),
+    );
+  });
+
   it("activates chat only after clinician and patient join, then validates message timestamps", () => {
     const platform = createPlatformDemo();
+    const patientActor = platform.users[0];
+    const clinicianActor = platform.clinicians[0];
     const session = createConsultationSession(platform, {
       patientUserId: "user_1",
       clinicianId: "clinician_1",
@@ -238,12 +328,10 @@ describe("consultation orchestration", () => {
       scheduledEndAt: "2026-07-02T02:30:00.000Z",
     });
 
-    const patientWaiting = joinConsultationSession(platform, session.id, "user_1", "user", "2026-07-02T02:01:00.000Z");
+    const patientWaiting = joinConsultationSession(platform, session.id, patientActor, "2026-07-02T02:01:00.000Z");
     expect(patientWaiting.status).toBe("waiting_clinician");
     expect(() =>
-      sendConsultationMessage(platform, session.id, {
-        senderId: "user_1",
-        senderRole: "user",
+      sendConsultationMessage(platform, session.id, patientActor, {
         content: "先发一条会被拦截。",
         createdAt: "2026-07-02T02:01:30.000Z",
       }),
@@ -252,25 +340,24 @@ describe("consultation orchestration", () => {
     const active = joinConsultationSession(
       platform,
       session.id,
-      "clinician_1",
-      "clinician",
+      clinicianActor,
       "2026-07-02T02:02:00.000Z",
     );
     expect(active.status).toBe("active");
     expect(active.expiresAt).toBe("2026-07-02T02:17:00.000Z");
 
-    const message = sendConsultationMessage(platform, session.id, {
-      senderId: "user_1",
-      senderRole: "user",
+    const message = sendConsultationMessage(platform, session.id, patientActor, {
       content: "我今天下楼还是疼。",
+      senderId: "clinician_1",
+      senderRole: "clinician",
       createdAt: "2026-07-02T02:03:00.000Z",
-    });
+    } as { content: string; createdAt: string });
     expect(message.content).toContain("下楼");
+    expect(message.senderId).toBe("user_1");
+    expect(message.senderRole).toBe("user");
 
     expect(() =>
-      sendConsultationMessage(platform, session.id, {
-        senderId: "clinician_1",
-        senderRole: "clinician",
+      sendConsultationMessage(platform, session.id, clinicianActor, {
         content: "超时消息不应发送。",
         createdAt: "2026-07-02T02:17:00.000Z",
       }),
@@ -279,6 +366,8 @@ describe("consultation orchestration", () => {
 
   it("does not keep clinician presence when early activation fails", () => {
     const platform = createPlatformDemo();
+    const patientActor = platform.users[0];
+    const clinicianActor = platform.clinicians[0];
     const session = createConsultationSession(platform, {
       patientUserId: "user_1",
       clinicianId: "clinician_1",
@@ -290,22 +379,20 @@ describe("consultation orchestration", () => {
     const patientEarly = joinConsultationSession(
       platform,
       session.id,
-      "user_1",
-      "user",
+      patientActor,
       "2026-07-02T01:58:00.000Z",
     );
     expect(patientEarly.status).toBe("waiting_clinician");
 
     expect(() =>
-      joinConsultationSession(platform, session.id, "clinician_1", "clinician", "2026-07-02T01:59:00.000Z"),
+      joinConsultationSession(platform, session.id, clinicianActor, "2026-07-02T01:59:00.000Z"),
     ).toThrow("Consultation can only be activated within its scheduled window");
     expect(platform.presence[session.id].clinicianPresent).toBe(false);
 
     const patientOnlyLater = joinConsultationSession(
       platform,
       session.id,
-      "user_1",
-      "user",
+      patientActor,
       "2026-07-02T02:01:00.000Z",
     );
     expect(patientOnlyLater.status).toBe("waiting_clinician");
@@ -313,6 +400,8 @@ describe("consultation orchestration", () => {
 
   it("does not expose system notices through public message creation", () => {
     const platform = createPlatformDemo();
+    const patientActor = platform.users[0];
+    const clinicianActor = platform.clinicians[0];
     const session = createConsultationSession(platform, {
       patientUserId: "user_1",
       clinicianId: "clinician_1",
@@ -321,17 +410,67 @@ describe("consultation orchestration", () => {
       scheduledEndAt: "2026-07-02T02:30:00.000Z",
     });
 
-    joinConsultationSession(platform, session.id, "user_1", "user", "2026-07-02T02:01:00.000Z");
-    joinConsultationSession(platform, session.id, "clinician_1", "clinician", "2026-07-02T02:02:00.000Z");
+    joinConsultationSession(platform, session.id, patientActor, "2026-07-02T02:01:00.000Z");
+    joinConsultationSession(platform, session.id, clinicianActor, "2026-07-02T02:02:00.000Z");
 
     expect(() =>
       sendConsultationMessage(platform, session.id, {
-        senderId: "system",
-        senderRole: "system",
+        id: "system",
+        role: "system",
+        displayName: "System",
+      } as never, {
         content: "伪造系统消息",
         createdAt: "2026-07-02T02:03:00.000Z",
       }),
-    ).toThrow("System messages must be created internally");
+    ).toThrow("Invalid consultation actor");
+  });
+
+  it("denies downgraded clinicians after booking across consultation actions", () => {
+    const platform = createPlatformDemo();
+    const patientActor = platform.users[0];
+    const clinicianSession = authenticateDemoUser(platform, {
+      username: "clinician_demo",
+      password: "mentis_clinician",
+    });
+    const clinicianActor = resolveAuthenticatedActor(platform, clinicianSession.token);
+    const session = createConsultationSession(platform, {
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      caseId: "case_downgrade",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+    });
+    joinConsultationSession(platform, session.id, patientActor, "2026-07-02T02:01:00.000Z");
+    joinConsultationSession(platform, session.id, clinicianActor, "2026-07-02T02:02:00.000Z");
+    platform.clinicians = platform.clinicians.map((clinician) =>
+      clinician.id === "clinician_1" ? { ...clinician, credentialStatus: "rejected" } : clinician,
+    );
+    const rejectedClinician = resolveAuthenticatedActor(platform, clinicianSession.token);
+    const [action] = listActionLibrary(platform);
+
+    expect(rejectedClinician).toMatchObject({ id: "clinician_1", credentialStatus: "rejected" });
+    expect(() =>
+      getConsultationSnapshot(platform, session.id, rejectedClinician, "2026-07-02T02:03:00.000Z"),
+    ).toThrow("Clinician credential is not verified");
+    expect(() =>
+      joinConsultationSession(platform, session.id, rejectedClinician, "2026-07-02T02:03:00.000Z"),
+    ).toThrow("Clinician credential is not verified");
+    expect(() =>
+      sendConsultationMessage(platform, session.id, rejectedClinician, {
+        content: "降级后不能发消息。",
+        createdAt: "2026-07-02T02:03:00.000Z",
+      }),
+    ).toThrow("Clinician credential is not verified");
+    expect(() =>
+      createClinicianPlanForConsultation(platform, session.id, rejectedClinician, {
+        title: "降级后计划",
+        dayLabel: "第 1 天",
+        actionIds: [action.id],
+        precautions: [],
+        progressionCriteria: [],
+        createdAt: "2026-07-02T02:12:00.000Z",
+      }),
+    ).toThrow("Clinician cannot create plan for consultation");
   });
 
   it("denies default snapshot access after authorization ends", () => {
@@ -349,13 +488,15 @@ describe("consultation orchestration", () => {
     }
     authorization.endsAt = "2000-01-02T00:00:00.000Z";
 
-    expect(() => getConsultationSnapshot(platform, session.id, "user_1", "user")).toThrow(
+    expect(() => getConsultationSnapshot(platform, session.id, platform.users[0])).toThrow(
       "Consultation access denied",
     );
   });
 
   it("lets a clinician send, accept, and decline plans without deleting source-separated plans", () => {
     const platform = createPlatformDemo();
+    const patientActor = platform.users[0];
+    const clinicianActor = platform.clinicians[0];
     const session = createConsultationSession(platform, {
       patientUserId: "user_1",
       clinicianId: "clinician_1",
@@ -363,8 +504,8 @@ describe("consultation orchestration", () => {
       scheduledStartAt: "2026-07-02T02:00:00.000Z",
       scheduledEndAt: "2026-07-02T02:30:00.000Z",
     });
-    joinConsultationSession(platform, session.id, "user_1", "user", "2026-07-02T02:01:00.000Z");
-    joinConsultationSession(platform, session.id, "clinician_1", "clinician", "2026-07-02T02:02:00.000Z");
+    joinConsultationSession(platform, session.id, patientActor, "2026-07-02T02:01:00.000Z");
+    joinConsultationSession(platform, session.id, clinicianActor, "2026-07-02T02:02:00.000Z");
 
     platform.trainingPlans.push({
       id: "plan_ai_existing",
@@ -392,7 +533,7 @@ describe("consultation orchestration", () => {
     const [action, declineAction] = listActionLibrary(platform);
     expect(action.bodyRegion).toBe("knee");
 
-    const plan = createClinicianPlanForConsultation(platform, session.id, "clinician_1", {
+    const plan = createClinicianPlanForConsultation(platform, session.id, clinicianActor, {
       title: "康复师定制膝前痛计划",
       dayLabel: "第 1 天",
       actionIds: [action.id],
@@ -400,7 +541,7 @@ describe("consultation orchestration", () => {
       progressionCriteria: ["24 小时内无明显加重"],
       createdAt: "2026-07-02T02:12:00.000Z",
     });
-    const declinedPlan = createClinicianPlanForConsultation(platform, session.id, "clinician_1", {
+    const declinedPlan = createClinicianPlanForConsultation(platform, session.id, clinicianActor, {
       title: "可选负荷进阶计划",
       dayLabel: "第 2 天",
       actionIds: [declineAction.id],
@@ -411,14 +552,13 @@ describe("consultation orchestration", () => {
 
     expect(plan.status).toBe("sent_to_patient");
     expect(plan.source).toBe("clinician_custom");
-    expect(declineConsultationPlan(platform, declinedPlan.id, "user_1").status).toBe("declined");
+    expect(declineConsultationPlan(platform, declinedPlan.id, patientActor).status).toBe("declined");
 
-    const accepted = acceptConsultationPlan(platform, plan.id, "user_1", "2026-07-02T02:20:00.000Z");
+    const accepted = acceptConsultationPlan(platform, plan.id, patientActor, "2026-07-02T02:20:00.000Z");
     const snapshot = getConsultationSnapshot(
       platform,
       session.id,
-      "user_1",
-      "user",
+      patientActor,
       "2026-07-04T02:20:00.000Z",
     );
 
@@ -434,6 +574,7 @@ describe("consultation orchestration", () => {
 
   it("denies plan offers before activation and from pending clinicians", () => {
     const platform = createPlatformDemo();
+    const clinicianActor = platform.clinicians[0];
     const session = createConsultationSession(platform, {
       patientUserId: "user_1",
       clinicianId: "clinician_1",
@@ -444,7 +585,7 @@ describe("consultation orchestration", () => {
     const [action] = listActionLibrary(platform);
 
     expect(() =>
-      createClinicianPlanForConsultation(platform, session.id, "clinician_1", {
+      createClinicianPlanForConsultation(platform, session.id, clinicianActor, {
         title: "未激活计划",
         dayLabel: "第 1 天",
         actionIds: [action.id],
@@ -492,7 +633,7 @@ describe("consultation orchestration", () => {
     });
 
     expect(() =>
-      createClinicianPlanForConsultation(platform, "consult_pending_fixture", pending.user.id, {
+      createClinicianPlanForConsultation(platform, "consult_pending_fixture", pending.user, {
         title: "待审核康复师计划",
         dayLabel: "第 1 天",
         actionIds: [action.id],
@@ -530,16 +671,16 @@ describe("consultation orchestration", () => {
       { ...basePlan, id: "plan_accepted", status: "accepted", acceptedAt: "2026-07-02T02:20:00.000Z" },
     );
 
-    expect(() => acceptConsultationPlan(platform, "plan_declined", "user_1", "2026-07-02T02:21:00.000Z")).toThrow(
+    expect(() => acceptConsultationPlan(platform, "plan_declined", platform.users[0], "2026-07-02T02:21:00.000Z")).toThrow(
       "Plan is not awaiting patient confirmation",
     );
-    expect(() => acceptConsultationPlan(platform, "plan_draft", "user_1", "2026-07-02T02:21:00.000Z")).toThrow(
+    expect(() => acceptConsultationPlan(platform, "plan_draft", platform.users[0], "2026-07-02T02:21:00.000Z")).toThrow(
       "Plan is not awaiting patient confirmation",
     );
-    expect(() => acceptConsultationPlan(platform, "plan_accepted", "user_1", "2026-07-02T02:21:00.000Z")).toThrow(
+    expect(() => acceptConsultationPlan(platform, "plan_accepted", platform.users[0], "2026-07-02T02:21:00.000Z")).toThrow(
       "Plan is not awaiting patient confirmation",
     );
-    expect(() => declineConsultationPlan(platform, "plan_accepted", "user_1")).toThrow(
+    expect(() => declineConsultationPlan(platform, "plan_accepted", platform.users[0])).toThrow(
       "Plan is not awaiting patient confirmation",
     );
   });

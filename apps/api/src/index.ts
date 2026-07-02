@@ -34,6 +34,7 @@ export interface PlatformDemo {
   trainingPlans: TrainingPlan[];
   actionLibrary: ActionLibraryItem[];
   presence: Record<string, ConsultationPresence>;
+  demoSessions: Record<string, DemoSessionRecord>;
 }
 
 export interface UserProfile {
@@ -61,6 +62,11 @@ export type AssessmentWorkflowInput = Omit<Assessment, "createdAt"> & {
 export interface DemoCredential {
   username: string;
   password: string;
+  actorId: string;
+  actorRole: "user" | "clinician";
+}
+
+export interface DemoSessionRecord {
   actorId: string;
   actorRole: "user" | "clinician";
 }
@@ -132,6 +138,11 @@ export interface UserMemory {
 export interface ConsultationPresence {
   patientPresent: boolean;
   clinicianPresent: boolean;
+}
+
+export interface ConsultationMessageInput {
+  content: string;
+  createdAt?: string;
 }
 
 export interface AssessmentWorkflowResult {
@@ -308,6 +319,7 @@ export function createPlatformDemo(): PlatformDemo {
     trainingPlans: [],
     actionLibrary: buildSeedActionLibrary(),
     presence: {},
+    demoSessions: {},
   };
 }
 
@@ -363,11 +375,7 @@ export function authenticateDemoUser(platform: PlatformDemo, input: LoginInput):
       throw new Error(`Unknown clinician: ${credential.actorId}`);
     }
 
-    return {
-      token: `demo_${clinician.id}_${demoTokenId()}`,
-      user: clinician,
-      memory: emptyUserMemory(clinician.id),
-    };
+    return createAuthenticatedSession(platform, clinician, emptyUserMemory(clinician.id));
   }
 
   const user = platform.users.find((candidate) => candidate.id === credential.actorId) as ProfiledUser | undefined;
@@ -375,11 +383,15 @@ export function authenticateDemoUser(platform: PlatformDemo, input: LoginInput):
     throw new Error(`Unknown user: ${credential.actorId}`);
   }
 
-  return {
-    token: `demo_${user.id}_${demoTokenId()}`,
-    user,
-    memory: getUserMemory(platform, user.id),
-  };
+  return createAuthenticatedSession(platform, user, getUserMemory(platform, user.id));
+}
+
+export function resolveAuthenticatedActor(platform: PlatformDemo, token: string): AuthenticatedActor {
+  const session = platform.demoSessions[token];
+  if (!session) {
+    throw new Error("Invalid or expired demo session");
+  }
+  return resolveActorById(platform, session.actorId, session.actorRole);
 }
 
 export function registerDemoUser(platform: PlatformDemo, input: RegistrationInput): AuthenticatedSession {
@@ -417,11 +429,7 @@ export function registerDemoUser(platform: PlatformDemo, input: RegistrationInpu
       ...platform.demoCredentials.filter((candidate) => candidate.username !== username),
     ];
 
-    return {
-      token: `demo_${clinician.id}_${demoTokenId()}`,
-      user: clinician,
-      memory: emptyUserMemory(clinician.id),
-    };
+    return createAuthenticatedSession(platform, clinician, emptyUserMemory(clinician.id));
   }
 
   const userId = `user_${username.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
@@ -442,11 +450,44 @@ export function registerDemoUser(platform: PlatformDemo, input: RegistrationInpu
   ];
   platform.userMemories[user.id] = emptyUserMemory(user.id);
 
-  return {
-    token: `demo_${user.id}_${demoTokenId()}`,
-    user,
-    memory: getUserMemory(platform, user.id),
+  return createAuthenticatedSession(platform, user, getUserMemory(platform, user.id));
+}
+
+function createAuthenticatedSession(
+  platform: PlatformDemo,
+  actor: AuthenticatedActor,
+  memory: UserMemory,
+): AuthenticatedSession {
+  const token = `demo_${actor.id}_${demoTokenId()}`;
+  platform.demoSessions[token] = {
+    actorId: actor.id,
+    actorRole: actor.role,
   };
+  return {
+    token,
+    user: actor,
+    memory,
+  };
+}
+
+function resolveActorById(
+  platform: PlatformDemo,
+  actorId: string,
+  actorRole: "user" | "clinician",
+): AuthenticatedActor {
+  if (actorRole === "clinician") {
+    const clinician = platform.clinicians.find((candidate) => candidate.id === actorId);
+    if (!clinician) {
+      throw new Error(`Unknown clinician: ${actorId}`);
+    }
+    return clinician;
+  }
+
+  const user = platform.users.find((candidate) => candidate.id === actorId) as ProfiledUser | undefined;
+  if (!user) {
+    throw new Error(`Unknown user: ${actorId}`);
+  }
+  return user;
 }
 
 function trimRegistrationField(value: unknown): string {
@@ -626,18 +667,15 @@ export function getClinicianConsultations(platform: PlatformDemo, clinicianId: s
 export function getConsultationSnapshot(
   platform: PlatformDemo,
   sessionId: string,
-  actorId: string,
-  actorRole: "user" | "clinician",
+  actor: AuthenticatedActor,
   accessAt?: string,
 ): ConsultationSnapshot {
   const session = requireConsultation(platform, sessionId);
   const authorization = requireAuthorization(platform, sessionId);
-  const actor =
-    actorRole === "user"
-      ? platform.users.find((candidate) => candidate.id === actorId)
-      : platform.clinicians.find((candidate) => candidate.id === actorId);
+  const resolvedActor = resolveFreshConsultationActor(platform, actor);
+  requireVerifiedClinicianForConsultation(resolvedActor);
   const authorizationCheckAt = accessAt ?? new Date().toISOString();
-  if (!actor || !canAccessAuthorizedCase(actor, authorization, session.caseId, authorizationCheckAt)) {
+  if (!canAccessAuthorizedCase(resolvedActor, authorization, session.caseId, authorizationCheckAt)) {
     throw new Error("Consultation access denied");
   }
 
@@ -657,23 +695,24 @@ export function getConsultationSnapshot(
 export function joinConsultationSession(
   platform: PlatformDemo,
   sessionId: string,
-  actorId: string,
-  actorRole: "user" | "clinician",
+  actor: AuthenticatedActor,
   joinedAt = new Date().toISOString(),
 ): ConsultationSession {
   const session = requireConsultation(platform, sessionId);
+  const resolvedActor = resolveFreshConsultationActor(platform, actor);
+  requireVerifiedClinicianForConsultation(resolvedActor);
   const canonicalJoinedAt = requireCanonicalIso(joinedAt, "joinedAt");
-  if (actorRole === "user" && actorId !== session.patientUserId) {
+  if (resolvedActor.role === "user" && resolvedActor.id !== session.patientUserId) {
     throw new Error("Patient is not assigned to consultation");
   }
-  if (actorRole === "clinician" && actorId !== session.clinicianId) {
+  if (resolvedActor.role === "clinician" && resolvedActor.id !== session.clinicianId) {
     throw new Error("Clinician is not assigned to consultation");
   }
 
   const presence = platform.presence[sessionId] ?? { patientPresent: false, clinicianPresent: false };
   const nextPresence = {
-    patientPresent: presence.patientPresent || actorRole === "user",
-    clinicianPresent: presence.clinicianPresent || actorRole === "clinician",
+    patientPresent: presence.patientPresent || resolvedActor.role === "user",
+    clinicianPresent: presence.clinicianPresent || resolvedActor.role === "clinician",
   };
 
   const nextSession =
@@ -688,28 +727,28 @@ export function joinConsultationSession(
 export function sendConsultationMessage(
   platform: PlatformDemo,
   sessionId: string,
-  input: Pick<ConsultationMessage, "senderId" | "senderRole" | "content"> & { createdAt?: string },
+  actor: AuthenticatedActor,
+  input: ConsultationMessageInput,
 ): ConsultationMessage {
   const session = requireConsultation(platform, sessionId);
+  const resolvedActor = resolveFreshConsultationActor(platform, actor);
+  requireVerifiedClinicianForConsultation(resolvedActor);
   const createdAt = input.createdAt ? requireCanonicalIso(input.createdAt, "createdAt") : new Date().toISOString();
-  if (input.senderRole === "system") {
-    throw new Error("System messages must be created internally");
-  }
   if (!canSendConsultationMessage(session, createdAt)) {
     throw new Error("Consultation chat is not active");
   }
-  if (input.senderRole === "user" && input.senderId !== session.patientUserId) {
+  if (resolvedActor.role === "user" && resolvedActor.id !== session.patientUserId) {
     throw new Error("Patient is not assigned to consultation");
   }
-  if (input.senderRole === "clinician" && input.senderId !== session.clinicianId) {
+  if (resolvedActor.role === "clinician" && resolvedActor.id !== session.clinicianId) {
     throw new Error("Clinician is not assigned to consultation");
   }
 
   const message: ConsultationMessage = {
     id: `msg_${demoTokenId()}`,
     consultationSessionId: sessionId,
-    senderId: input.senderId,
-    senderRole: input.senderRole,
+    senderId: resolvedActor.id,
+    senderRole: resolvedActor.role,
     content: input.content.trim(),
     kind: "text",
     createdAt,
@@ -734,22 +773,22 @@ export interface ClinicianPlanInput {
 export function createClinicianPlanForConsultation(
   platform: PlatformDemo,
   sessionId: string,
-  clinicianId: string,
+  actor: AuthenticatedActor,
   input: ClinicianPlanInput,
 ): TrainingPlan {
   const session = requireConsultation(platform, sessionId);
   const authorization = requireAuthorization(platform, sessionId);
   const createdAt = input.createdAt ? requireCanonicalIso(input.createdAt, "createdAt") : new Date().toISOString();
-  const clinician = platform.clinicians.find((candidate) => candidate.id === clinicianId);
+  const resolvedActor = resolveFreshConsultationActor(platform, actor);
   if (!session.activatedAt) {
     throw new Error("Consultation has not been activated");
   }
   if (
-    !clinician ||
-    clinician.credentialStatus !== "verified" ||
-    session.clinicianId !== clinicianId ||
+    resolvedActor.role !== "clinician" ||
+    resolvedActor.credentialStatus !== "verified" ||
+    session.clinicianId !== resolvedActor.id ||
     !authorization.accessMode.includes("plan_create") ||
-    !canAccessAuthorizedCase(clinician, authorization, session.caseId, createdAt)
+    !canAccessAuthorizedCase(resolvedActor, authorization, session.caseId, createdAt)
   ) {
     throw new Error("Clinician cannot create plan for consultation");
   }
@@ -770,7 +809,7 @@ export function createClinicianPlanForConsultation(
     caseId: session.caseId,
     patientUserId: session.patientUserId,
     source: "clinician_custom",
-    authorId: clinicianId,
+    authorId: resolvedActor.id,
     authorRole: "clinician",
     status: "sent_to_patient",
     title: input.title.trim(),
@@ -794,7 +833,7 @@ export function createClinicianPlanForConsultation(
     {
       id: `msg_${demoTokenId()}`,
       consultationSessionId: sessionId,
-      senderId: clinicianId,
+      senderId: resolvedActor.id,
       senderRole: "clinician",
       content: `我给你发送了一份定制计划：${plan.title}`,
       kind: "plan_offer",
@@ -807,12 +846,13 @@ export function createClinicianPlanForConsultation(
 export function acceptConsultationPlan(
   platform: PlatformDemo,
   planId: string,
-  patientUserId: string,
+  actor: AuthenticatedActor,
   acceptedAt = new Date().toISOString(),
 ): TrainingPlan {
   const canonicalAcceptedAt = requireCanonicalIso(acceptedAt, "acceptedAt");
+  const resolvedActor = resolveFreshConsultationActor(platform, actor);
   const plan = platform.trainingPlans.find((candidate) => candidate.id === planId);
-  if (!plan || plan.patientUserId !== patientUserId) {
+  if (resolvedActor.role !== "user" || !plan || plan.patientUserId !== resolvedActor.id) {
     throw new Error("Plan access denied");
   }
   if (plan.status !== "sent_to_patient") {
@@ -821,7 +861,7 @@ export function acceptConsultationPlan(
 
   const accepted = { ...plan, status: "accepted" as const, acceptedAt: canonicalAcceptedAt };
   platform.trainingPlans = platform.trainingPlans.map((candidate) => (candidate.id === planId ? accepted : candidate));
-  rememberTrainingPlan(platform, patientUserId, {
+  rememberTrainingPlan(platform, resolvedActor.id, {
     id: accepted.id,
     caseId: accepted.caseId,
     categoryId: inferCategoryFromTrainingPlan(accepted),
@@ -839,10 +879,11 @@ export function acceptConsultationPlan(
 export function declineConsultationPlan(
   platform: PlatformDemo,
   planId: string,
-  patientUserId: string,
+  actor: AuthenticatedActor,
 ): TrainingPlan {
+  const resolvedActor = resolveFreshConsultationActor(platform, actor);
   const plan = platform.trainingPlans.find((candidate) => candidate.id === planId);
-  if (!plan || plan.patientUserId !== patientUserId) {
+  if (resolvedActor.role !== "user" || !plan || plan.patientUserId !== resolvedActor.id) {
     throw new Error("Plan access denied");
   }
   if (plan.status !== "sent_to_patient") {
@@ -860,6 +901,26 @@ function requireConsultation(platform: PlatformDemo, sessionId: string): Consult
     throw new Error(`Unknown consultation: ${sessionId}`);
   }
   return session;
+}
+
+function resolveFreshConsultationActor(platform: PlatformDemo, actor: unknown): AuthenticatedActor {
+  if (!actor || typeof actor !== "object") {
+    throw new Error("Invalid consultation actor");
+  }
+  const candidate = actor as { id?: unknown; role?: unknown };
+  if (typeof candidate.id !== "string") {
+    throw new Error("Invalid consultation actor");
+  }
+  if (candidate.role !== "user" && candidate.role !== "clinician") {
+    throw new Error("Invalid consultation actor");
+  }
+  return resolveActorById(platform, candidate.id, candidate.role);
+}
+
+function requireVerifiedClinicianForConsultation(actor: AuthenticatedActor): void {
+  if (actor.role === "clinician" && actor.credentialStatus !== "verified") {
+    throw new Error("Clinician credential is not verified");
+  }
 }
 
 function requireAuthorization(platform: PlatformDemo, sessionId: string): CaseAuthorization {
