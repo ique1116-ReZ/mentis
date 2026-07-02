@@ -26,6 +26,7 @@ import {
   sendConsultationMessage,
   QwenChatClient,
   resolveCorsOrigin,
+  type RegistrationInput,
   type RehabConsultCategory,
 } from "../src/index";
 
@@ -117,6 +118,20 @@ describe("auth and registration", () => {
       }),
     ).toThrow("Invalid invite code");
   });
+
+  it("rejects runtime-shaped registration input with a controlled missing invite error", () => {
+    const platform = createPlatformDemo();
+
+    expect(() =>
+      registerDemoUser(platform, {
+        username: "missing_invite",
+        password: "secret",
+        displayName: "No Invite",
+        heightCm: "180",
+        weightKg: "72",
+      } as RegistrationInput),
+    ).toThrow("Invalid invite code");
+  });
 });
 
 describe("consultation orchestration", () => {
@@ -169,6 +184,30 @@ describe("consultation orchestration", () => {
     });
     expect(clinician.memory.notes).toEqual([]);
     expect(getClinicianConsultations(platform, clinician.user.id)).toHaveLength(0);
+  });
+
+  it("does not assign consultations to pending clinicians", () => {
+    const platform = createPlatformDemo();
+    const clinician = registerDemoUser(platform, {
+      accountRole: "clinician",
+      username: "pending_assignment",
+      password: "secret",
+      displayName: "待审核康复师",
+      inviteCode: "ique1116",
+      heightCm: "",
+      weightKg: "",
+      specialties: ["knee"],
+    });
+
+    expect(() =>
+      createConsultationSession(platform, {
+        patientUserId: "user_1",
+        clinicianId: clinician.user.id,
+        caseId: "case_demo",
+        scheduledStartAt: "2026-07-02T02:00:00.000Z",
+        scheduledEndAt: "2026-07-02T02:30:00.000Z",
+      }),
+    ).toThrow("Consultation clinician must be verified");
   });
 
   it("creates paid sessions and shows clinicians only their assigned consultations", () => {
@@ -238,6 +277,83 @@ describe("consultation orchestration", () => {
     ).toThrow("Consultation chat is not active");
   });
 
+  it("does not keep clinician presence when early activation fails", () => {
+    const platform = createPlatformDemo();
+    const session = createConsultationSession(platform, {
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      caseId: "case_demo",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+    });
+
+    const patientEarly = joinConsultationSession(
+      platform,
+      session.id,
+      "user_1",
+      "user",
+      "2026-07-02T01:58:00.000Z",
+    );
+    expect(patientEarly.status).toBe("waiting_clinician");
+
+    expect(() =>
+      joinConsultationSession(platform, session.id, "clinician_1", "clinician", "2026-07-02T01:59:00.000Z"),
+    ).toThrow("Consultation can only be activated within its scheduled window");
+    expect(platform.presence[session.id].clinicianPresent).toBe(false);
+
+    const patientOnlyLater = joinConsultationSession(
+      platform,
+      session.id,
+      "user_1",
+      "user",
+      "2026-07-02T02:01:00.000Z",
+    );
+    expect(patientOnlyLater.status).toBe("waiting_clinician");
+  });
+
+  it("does not expose system notices through public message creation", () => {
+    const platform = createPlatformDemo();
+    const session = createConsultationSession(platform, {
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      caseId: "case_demo",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+    });
+
+    joinConsultationSession(platform, session.id, "user_1", "user", "2026-07-02T02:01:00.000Z");
+    joinConsultationSession(platform, session.id, "clinician_1", "clinician", "2026-07-02T02:02:00.000Z");
+
+    expect(() =>
+      sendConsultationMessage(platform, session.id, {
+        senderId: "system",
+        senderRole: "system",
+        content: "伪造系统消息",
+        createdAt: "2026-07-02T02:03:00.000Z",
+      }),
+    ).toThrow("System messages must be created internally");
+  });
+
+  it("denies default snapshot access after authorization ends", () => {
+    const platform = createPlatformDemo();
+    const session = createConsultationSession(platform, {
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      caseId: "case_historical",
+      scheduledStartAt: "2000-01-01T00:00:00.000Z",
+      scheduledEndAt: "2000-01-01T00:30:00.000Z",
+    });
+    const authorization = platform.caseAuthorizations.find((candidate) => candidate.consultationSessionId === session.id);
+    if (!authorization) {
+      throw new Error("Expected authorization fixture");
+    }
+    authorization.endsAt = "2000-01-02T00:00:00.000Z";
+
+    expect(() => getConsultationSnapshot(platform, session.id, "user_1", "user")).toThrow(
+      "Consultation access denied",
+    );
+  });
+
   it("lets a clinician send, accept, and decline plans without deleting source-separated plans", () => {
     const platform = createPlatformDemo();
     const session = createConsultationSession(platform, {
@@ -247,6 +363,8 @@ describe("consultation orchestration", () => {
       scheduledStartAt: "2026-07-02T02:00:00.000Z",
       scheduledEndAt: "2026-07-02T02:30:00.000Z",
     });
+    joinConsultationSession(platform, session.id, "user_1", "user", "2026-07-02T02:01:00.000Z");
+    joinConsultationSession(platform, session.id, "clinician_1", "clinician", "2026-07-02T02:02:00.000Z");
 
     platform.trainingPlans.push({
       id: "plan_ai_existing",
@@ -312,6 +430,118 @@ describe("consultation orchestration", () => {
     expect(snapshot.plans.find((candidate) => candidate.id === plan.id)?.source).toBe("clinician_custom");
     expect(snapshot.messages.some((message) => message.kind === "plan_offer")).toBe(true);
     expect(snapshot.actionLibrary).toHaveLength(2);
+  });
+
+  it("denies plan offers before activation and from pending clinicians", () => {
+    const platform = createPlatformDemo();
+    const session = createConsultationSession(platform, {
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      caseId: "case_demo",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+    });
+    const [action] = listActionLibrary(platform);
+
+    expect(() =>
+      createClinicianPlanForConsultation(platform, session.id, "clinician_1", {
+        title: "未激活计划",
+        dayLabel: "第 1 天",
+        actionIds: [action.id],
+        precautions: [],
+        progressionCriteria: [],
+        createdAt: "2026-07-02T02:01:00.000Z",
+      }),
+    ).toThrow("Consultation has not been activated");
+
+    const pending = registerDemoUser(platform, {
+      accountRole: "clinician",
+      username: "pending_planner",
+      password: "secret",
+      displayName: "待审核康复师",
+      inviteCode: "ique1116",
+      heightCm: "",
+      weightKg: "",
+      specialties: ["knee"],
+    });
+    platform.consultations.push({
+      id: "consult_pending_fixture",
+      patientUserId: "user_1",
+      clinicianId: pending.user.id,
+      caseId: "case_pending",
+      status: "active",
+      paymentStatus: "paid",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+      activatedAt: "2026-07-02T02:02:00.000Z",
+      expiresAt: "2026-07-02T02:17:00.000Z",
+      durationMinutes: 15,
+      createdAt: "2026-07-02T01:50:00.000Z",
+    });
+    platform.caseAuthorizations.push({
+      id: "auth_pending_fixture",
+      caseId: "case_pending",
+      patientUserId: "user_1",
+      clinicianId: pending.user.id,
+      consultationSessionId: "consult_pending_fixture",
+      scope: ["profile", "assessment_summary", "current_plans"],
+      accessMode: ["read", "plan_create"],
+      startsAt: "2026-07-02T02:00:00.000Z",
+      endsAt: "2026-07-09T02:30:00.000Z",
+      createdAt: "2026-07-02T01:50:00.000Z",
+    });
+
+    expect(() =>
+      createClinicianPlanForConsultation(platform, "consult_pending_fixture", pending.user.id, {
+        title: "待审核康复师计划",
+        dayLabel: "第 1 天",
+        actionIds: [action.id],
+        precautions: [],
+        progressionCriteria: [],
+        createdAt: "2026-07-02T02:12:00.000Z",
+      }),
+    ).toThrow("Clinician cannot create plan for consultation");
+  });
+
+  it("only lets patients accept or decline plans awaiting confirmation", () => {
+    const platform = createPlatformDemo();
+    const basePlan = {
+      caseId: "case_demo",
+      patientUserId: "user_1",
+      source: "clinician_custom" as const,
+      authorId: "clinician_1",
+      authorRole: "clinician" as const,
+      title: "状态保护计划",
+      dayLabel: "第 1 天",
+      items: [{ title: "靠墙静蹲", meta: "4 组 x 20 秒", state: "todo" as const }],
+      stage: {
+        name: "负荷控制",
+        progressLabel: "第 1 周",
+        progressPercent: 10,
+        goals: ["下楼疼痛下降"],
+      },
+      precautions: ["疼痛超过 3/10 时停止"],
+      progressionCriteria: ["24 小时内无明显加重"],
+      createdAt: "2026-07-02T02:12:00.000Z",
+    };
+    platform.trainingPlans.push(
+      { ...basePlan, id: "plan_declined", status: "declined" },
+      { ...basePlan, id: "plan_draft", status: "draft" },
+      { ...basePlan, id: "plan_accepted", status: "accepted", acceptedAt: "2026-07-02T02:20:00.000Z" },
+    );
+
+    expect(() => acceptConsultationPlan(platform, "plan_declined", "user_1", "2026-07-02T02:21:00.000Z")).toThrow(
+      "Plan is not awaiting patient confirmation",
+    );
+    expect(() => acceptConsultationPlan(platform, "plan_draft", "user_1", "2026-07-02T02:21:00.000Z")).toThrow(
+      "Plan is not awaiting patient confirmation",
+    );
+    expect(() => acceptConsultationPlan(platform, "plan_accepted", "user_1", "2026-07-02T02:21:00.000Z")).toThrow(
+      "Plan is not awaiting patient confirmation",
+    );
+    expect(() => declineConsultationPlan(platform, "plan_accepted", "user_1")).toThrow(
+      "Plan is not awaiting patient confirmation",
+    );
   });
 });
 
