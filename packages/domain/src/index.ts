@@ -82,6 +82,110 @@ export interface CaseRecord {
   timeline: TimelineEvent[];
 }
 
+export type ConsultationStatus = "scheduled" | "waiting_clinician" | "active" | "expired" | "closed" | "cancelled";
+export type ConsultationPaymentStatus = "unpaid" | "paid" | "refunded";
+
+export interface ConsultationSession {
+  id: string;
+  patientUserId: string;
+  clinicianId: string;
+  caseId: string;
+  status: ConsultationStatus;
+  paymentStatus: ConsultationPaymentStatus;
+  scheduledStartAt: string;
+  scheduledEndAt: string;
+  activatedAt?: string;
+  expiresAt?: string;
+  closedAt?: string;
+  durationMinutes: number;
+  createdAt: string;
+}
+
+export type CaseAuthorizationScope =
+  | "profile"
+  | "assessment_summary"
+  | "case_timeline"
+  | "reports"
+  | "current_plans"
+  | "chat_history";
+
+export type CaseAuthorizationAccessMode = "read" | "comment" | "plan_create";
+
+export interface CaseAuthorization {
+  id: string;
+  caseId: string;
+  patientUserId: string;
+  clinicianId: string;
+  consultationSessionId: string;
+  scope: CaseAuthorizationScope[];
+  accessMode: CaseAuthorizationAccessMode[];
+  startsAt: string;
+  endsAt: string;
+  revokedAt?: string;
+  createdAt: string;
+}
+
+export type ConsultationMessageKind = "text" | "system_notice" | "plan_offer";
+
+export interface ConsultationMessage {
+  id: string;
+  consultationSessionId: string;
+  senderId: string;
+  senderRole: "user" | "clinician" | "system";
+  content: string;
+  kind: ConsultationMessageKind;
+  createdAt: string;
+  readAt?: string;
+}
+
+export type TrainingPlanSource = "ai_generated" | "clinician_custom" | "clinician_reviewed_ai";
+export type TrainingPlanStatus = "draft" | "sent_to_patient" | "accepted" | "declined" | "archived";
+
+export interface TrainingPlanItem {
+  title: string;
+  meta: string;
+  state: "done" | "todo";
+}
+
+export interface TrainingPlanStage {
+  name: string;
+  progressLabel: string;
+  progressPercent: number;
+  goals: string[];
+}
+
+export interface TrainingPlan {
+  id: string;
+  caseId: string;
+  patientUserId: string;
+  source: TrainingPlanSource;
+  authorId: string;
+  authorRole: "assistant" | "clinician";
+  status: TrainingPlanStatus;
+  title: string;
+  dayLabel: string;
+  items: TrainingPlanItem[];
+  stage: TrainingPlanStage;
+  precautions: string[];
+  progressionCriteria: string[];
+  createdAt: string;
+  sentAt?: string;
+  acceptedAt?: string;
+}
+
+export interface ActionLibraryItem {
+  id: string;
+  title: string;
+  bodyRegion: Assessment["bodyRegion"];
+  phase: string;
+  defaultDosage: string;
+  instructions: string[];
+  contraindications: string[];
+  progressionCriteria: string[];
+  mediaUrl?: string;
+  tags: string[];
+}
+
 export type EvidenceType =
   | "clinical_practice_guideline"
   | "consensus_statement"
@@ -250,6 +354,93 @@ export function canAccessCase(actor: PlatformActor, record: CaseRecord): boolean
     return record.authorizedOrganizationIds.includes(actor.id);
   }
   return false;
+}
+
+export function buildCaseAuthorization(
+  input: Omit<CaseAuthorization, "id" | "createdAt"> & { id?: string; createdAt?: string },
+): CaseAuthorization {
+  return {
+    ...input,
+    id: input.id ?? `auth_${cryptoSafeId()}`,
+    createdAt: input.createdAt ?? new Date().toISOString(),
+  };
+}
+
+export function canAccessAuthorizedCase(
+  actor: PlatformActor,
+  authorization: CaseAuthorization,
+  caseId: string,
+): boolean {
+  if (actor.role === "admin") {
+    return true;
+  }
+  if (authorization.revokedAt) {
+    return false;
+  }
+  if (caseId !== authorization.caseId) {
+    return false;
+  }
+  if (actor.role === "user") {
+    return actor.id === authorization.patientUserId;
+  }
+  if (actor.role === "clinician") {
+    return actor.id === authorization.clinicianId;
+  }
+  return false;
+}
+
+export function activateConsultationSession(
+  session: ConsultationSession,
+  activatedAt = new Date().toISOString(),
+): ConsultationSession {
+  if (session.paymentStatus !== "paid") {
+    throw new Error("Consultation must be paid before activation");
+  }
+  if (session.status === "cancelled" || session.status === "closed" || session.status === "expired") {
+    throw new Error(`Cannot activate consultation with status ${session.status}`);
+  }
+
+  const expiresAt = new Date(new Date(activatedAt).getTime() + session.durationMinutes * 60_000).toISOString();
+  return {
+    ...session,
+    status: "active",
+    activatedAt,
+    expiresAt,
+  };
+}
+
+export function expireConsultationSession(
+  session: ConsultationSession,
+  closedAt = new Date().toISOString(),
+): ConsultationSession {
+  if (session.status === "closed" || session.status === "cancelled") {
+    return session;
+  }
+  return {
+    ...session,
+    status: "expired",
+    closedAt,
+  };
+}
+
+export function canSendConsultationMessage(
+  session: ConsultationSession,
+  at = new Date().toISOString(),
+): boolean {
+  if (session.status !== "active" || !session.expiresAt) {
+    return false;
+  }
+  return new Date(at).getTime() < new Date(session.expiresAt).getTime();
+}
+
+export function createTrainingPlan(input: TrainingPlan): TrainingPlan {
+  return {
+    ...input,
+    stage: {
+      ...input.stage,
+      progressPercent: clamp(input.stage.progressPercent, 0, 100),
+    },
+  };
 }
 
 export function createAuditEvent(input: Omit<AuditEvent, "id" | "sensitiveDataCategory" | "createdAt">): AuditEvent {

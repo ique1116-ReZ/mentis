@@ -1,16 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
   assessRedFlags,
+  activateConsultationSession,
+  buildCaseAuthorization,
   buildInitialAssessment,
+  canAccessAuthorizedCase,
   canAccessCase,
+  canSendConsultationMessage,
   createAuditEvent,
+  createTrainingPlan,
   draftKneeRunningPlan,
+  expireConsultationSession,
   summarizeEvidence,
   type CaseRecord,
+  type CaseAuthorization,
   type Clinician,
+  type ConsultationSession,
   type Organization,
   type User,
-} from "../src/index";
+} from "../src/index.ts";
 
 describe("clinical safety and case access", () => {
   it("escalates red-flag symptoms before generating rehab advice", () => {
@@ -123,5 +131,124 @@ describe("clinical safety and case access", () => {
     expect(summary.conflictPolicy).toContain("newer clinical guidelines");
     expect(summary.citations).toHaveLength(2);
   });
-});
 
+  it("limits clinician case access to explicit consultation authorization", () => {
+    const authorization = buildCaseAuthorization({
+      caseId: "case_1",
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      consultationSessionId: "consult_1",
+      scope: ["profile", "assessment_summary", "current_plans"],
+      accessMode: ["read", "plan_create"],
+      startsAt: "2026-07-02T02:00:00.000Z",
+      endsAt: "2026-07-02T03:00:00.000Z",
+    });
+
+    const clinician: Clinician = {
+      id: "clinician_1",
+      role: "clinician",
+      displayName: "李康复师",
+      credentialStatus: "verified",
+      specialties: ["knee"],
+    };
+    const otherClinician: Clinician = {
+      id: "clinician_2",
+      role: "clinician",
+      displayName: "王医生",
+      credentialStatus: "verified",
+      specialties: ["shoulder"],
+    };
+
+    expect(canAccessAuthorizedCase(clinician, authorization, "case_1")).toBe(true);
+    expect(canAccessAuthorizedCase(otherClinician, authorization, "case_1")).toBe(false);
+    expect(canAccessAuthorizedCase(clinician, authorization, "case_2")).toBe(false);
+  });
+
+  it("opens a 15 minute consultation when both parties are present", () => {
+    const session: ConsultationSession = {
+      id: "consult_1",
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      caseId: "case_1",
+      status: "scheduled",
+      paymentStatus: "paid",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+      durationMinutes: 15,
+      createdAt: "2026-07-02T01:50:00.000Z",
+    };
+
+    const active = activateConsultationSession(session, "2026-07-02T02:03:00.000Z");
+
+    expect(active.status).toBe("active");
+    expect(active.activatedAt).toBe("2026-07-02T02:03:00.000Z");
+    expect(active.expiresAt).toBe("2026-07-02T02:18:00.000Z");
+    expect(canSendConsultationMessage(active, "2026-07-02T02:17:59.000Z")).toBe(true);
+    expect(canSendConsultationMessage(active, "2026-07-02T02:18:00.000Z")).toBe(false);
+  });
+
+  it("expires inactive or elapsed consultations and rejects chat", () => {
+    const active: ConsultationSession = {
+      id: "consult_1",
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      caseId: "case_1",
+      status: "active",
+      paymentStatus: "paid",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+      activatedAt: "2026-07-02T02:03:00.000Z",
+      expiresAt: "2026-07-02T02:18:00.000Z",
+      durationMinutes: 15,
+      createdAt: "2026-07-02T01:50:00.000Z",
+    };
+
+    const expired = expireConsultationSession(active, "2026-07-02T02:20:00.000Z");
+
+    expect(expired.status).toBe("expired");
+    expect(expired.closedAt).toBe("2026-07-02T02:20:00.000Z");
+    expect(canSendConsultationMessage(expired, "2026-07-02T02:20:01.000Z")).toBe(false);
+  });
+
+  it("keeps AI and clinician plans as separate patient-confirmed records", () => {
+    const aiPlan = createTrainingPlan({
+      id: "plan_ai",
+      caseId: "case_1",
+      patientUserId: "user_1",
+      source: "ai_generated",
+      authorId: "assistant",
+      authorRole: "assistant",
+      status: "accepted",
+      title: "AI 膝盖保守计划",
+      dayLabel: "第 1 天",
+      items: [{ title: "等长伸膝", meta: "3 组 x 30 秒", state: "todo" }],
+      stage: { name: "镇痛与负荷管理", progressLabel: "第 1 周", progressPercent: 10, goals: ["疼痛可控"] },
+      precautions: ["疼痛超过 3/10 时停止"],
+      progressionCriteria: ["24 小时内无明显加重"],
+      createdAt: "2026-07-02T02:00:00.000Z",
+      acceptedAt: "2026-07-02T02:01:00.000Z",
+    });
+    const clinicianPlan = createTrainingPlan({
+      id: "plan_clinician",
+      caseId: "case_1",
+      patientUserId: "user_1",
+      source: "clinician_custom",
+      authorId: "clinician_1",
+      authorRole: "clinician",
+      status: "sent_to_patient",
+      title: "康复师定制膝前痛计划",
+      dayLabel: "第 1 天",
+      items: [{ title: "靠墙静蹲", meta: "4 组 x 20 秒", state: "todo" }],
+      stage: { name: "负荷控制", progressLabel: "第 1 周", progressPercent: 15, goals: ["恢复下楼耐受"] },
+      precautions: ["不做跳跃"],
+      progressionCriteria: ["下楼疼痛不超过 3/10"],
+      createdAt: "2026-07-02T02:10:00.000Z",
+      sentAt: "2026-07-02T02:12:00.000Z",
+    });
+
+    expect(aiPlan.source).toBe("ai_generated");
+    expect(clinicianPlan.source).toBe("clinician_custom");
+    expect(aiPlan.id).not.toBe(clinicianPlan.id);
+    expect(clinicianPlan.status).toBe("sent_to_patient");
+  });
+});
