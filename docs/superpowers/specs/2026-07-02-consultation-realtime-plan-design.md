@@ -15,6 +15,8 @@ The first version should be intentionally small: patients can reserve a 15-minut
 - Patient acceptance is explicit. A pushed clinician plan appears as a message or notification and does not automatically replace the AI plan.
 - Clinicians only see patients and cases tied to their own consultations.
 - A consultation is a bounded paid service, not an always-open support chat.
+- Registration can create different account roles, but clinician or doctor privileges require credential review.
+- Login uses one entry point and then routes each role to a different workspace.
 - The first implementation may mock payment, availability, and online presence, but the data model should leave room for real integrations.
 
 ## Recommended Approach
@@ -163,6 +165,38 @@ Fields:
 
 First phase can seed a small knee-focused library and expand later.
 
+## Registration And Role Routing
+
+The app should keep one login entry point, but registration has an account-type choice.
+
+Patient registration:
+
+- User chooses "患者".
+- User enters username, password, invite code, display name, height, and weight.
+- The account is created with `role = user`.
+- After login or registration, the user enters the patient workspace.
+
+Clinician or doctor registration:
+
+- User chooses "康复师/医生".
+- User enters username, password, invite code, display name, discipline, credential summary, specialties, and optional organization.
+- The account is created with `role = clinician` and `credentialStatus = pending`.
+- A pending clinician cannot be booked by patients and cannot access patient records.
+- After login, a pending clinician sees a credential-review waiting page.
+- A verified clinician enters the clinician workbench.
+- A rejected clinician sees a credential-rejected page with next steps.
+
+First phase can seed one verified demo clinician for testing. This is not a substitute for the role model; it is only a local demo path.
+
+Post-login routing:
+
+- `user` -> patient workspace.
+- `clinician` + `credentialStatus = verified` -> clinician workbench.
+- `clinician` + `credentialStatus = pending` -> credential-review waiting page.
+- `clinician` + `credentialStatus = rejected` -> credential-rejected page.
+- `organization` -> future organization workspace.
+- `admin` -> future admin/audit workspace.
+
 ## Patient Experience
 
 ### Appointment
@@ -291,6 +325,7 @@ All endpoints must verify actor identity and session-scoped authorization.
 
 Patient side:
 
+- Add account-type choice during registration.
 - Add consultation entry point from current case and support panel.
 - Add appointment and countdown states.
 - Add live consultation chat view.
@@ -299,7 +334,9 @@ Patient side:
 
 Clinician side:
 
-- Route clinician users to a clinician workbench after login.
+- Route verified clinician users to a clinician workbench after login.
+- Route pending clinician users to a credential-review waiting page.
+- Route rejected clinician users to a credential-rejected page.
 - Add consultation list.
 - Add consultation detail with patient case panel and chat.
 - Add plan editor with seeded action library.

@@ -434,6 +434,42 @@ describe("consultation orchestration", () => {
     expect(session.user.displayName).toBe("李康复师");
   });
 
+  it("registers patients and pending clinicians through the same auth endpoint", () => {
+    const platform = createPlatformDemo();
+
+    const patient = registerDemoUser(platform, {
+      accountRole: "user",
+      username: "patient_new",
+      password: "secret",
+      displayName: "新患者",
+      inviteCode: "ique1116",
+      heightCm: "176",
+      weightKg: "70",
+    });
+
+    const clinician = registerDemoUser(platform, {
+      accountRole: "clinician",
+      username: "clinician_new",
+      password: "secret",
+      displayName: "新康复师",
+      inviteCode: "ique1116",
+      heightCm: "",
+      weightKg: "",
+      discipline: "运动康复师",
+      credentialSummary: "三年跑步损伤康复经验",
+      specialties: ["knee", "running"],
+      organizationName: "个人执业",
+    });
+
+    expect(patient.user.role).toBe("user");
+    expect(clinician.user.role).toBe("clinician");
+    expect(clinician.user).toMatchObject({
+      credentialStatus: "pending",
+      specialties: ["knee", "running"],
+    });
+    expect(getClinicianConsultations(platform, clinician.user.id)).toHaveLength(0);
+  });
+
   it("shows clinicians only their assigned consultations", () => {
     const platform = createPlatformDemo();
     const session = createConsultationSession(platform, {
@@ -568,6 +604,20 @@ export interface AuthenticatedSession {
   user: AuthenticatedActor;
   memory: UserMemory;
 }
+
+export interface RegistrationInput {
+  accountRole: "user" | "clinician";
+  username: string;
+  password: string;
+  displayName: string;
+  inviteCode: string;
+  heightCm: string;
+  weightKg: string;
+  discipline?: string;
+  credentialSummary?: string;
+  specialties?: string[];
+  organizationName?: string;
+}
 ```
 
 Replace `authenticateDemoUser` with this version:
@@ -623,10 +673,73 @@ function emptyUserMemory(userId: string): UserMemory {
 Update `registerDemoUser` credential creation to use the new fields:
 
 ```ts
+export function registerDemoUser(platform: PlatformDemo, input: RegistrationInput): AuthenticatedSession {
+  const username = input.username.trim();
+  if (!username) {
+    throw new Error("Username is required");
+  }
+  if (input.inviteCode.trim() !== "ique1116") {
+    throw new Error("Invalid invite code");
+  }
+  if (!input.password.trim()) {
+    throw new Error("Password is required");
+  }
+
+  if (input.accountRole === "clinician") {
+    const clinicianId = `clinician_${username.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+    const clinician: Clinician = {
+      id: clinicianId,
+      role: "clinician",
+      displayName: input.displayName.trim() || "待审核康复师",
+      credentialStatus: "pending",
+      specialties: normalizeSpecialties(input.specialties, input.discipline),
+    };
+    platform.clinicians = [clinician, ...platform.clinicians.filter((candidate) => candidate.id !== clinician.id)];
+    platform.demoCredentials = [
+      { username, password: input.password, actorId: clinician.id, actorRole: "clinician" },
+      ...platform.demoCredentials.filter((candidate) => candidate.username !== username),
+    ];
+    return {
+      token: `demo_${clinician.id}_${demoTokenId()}`,
+      user: clinician,
+      memory: emptyUserMemory(clinician.id),
+    };
+  }
+
+  const userId = `user_${username.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+  const user: ProfiledUser = {
+    id: userId,
+    role: "user",
+    displayName: input.displayName.trim() || "ique1116",
+    profile: {
+      heightCm: input.heightCm.trim(),
+      weightKg: input.weightKg.trim(),
+    },
+  };
+
+  platform.users = [user, ...platform.users.filter((candidate) => candidate.id !== user.id)];
   platform.demoCredentials = [
     { username, password: input.password, actorId: user.id, actorRole: "user" },
     ...platform.demoCredentials.filter((candidate) => candidate.username !== username),
   ];
+  platform.userMemories[user.id] = emptyUserMemory(user.id);
+
+  return {
+    token: `demo_${user.id}_${demoTokenId()}`,
+    user,
+    memory: getUserMemory(platform, user.id),
+  };
+}
+
+function normalizeSpecialties(specialties: string[] | undefined, discipline: string | undefined): string[] {
+  const normalized = (specialties ?? [])
+    .map((specialty) => specialty.trim())
+    .filter(Boolean);
+  if (normalized.length > 0) {
+    return normalized;
+  }
+  return discipline?.trim() ? [discipline.trim()] : [];
+}
 ```
 
 - [ ] **Step 4: Seed consultations infrastructure in `createPlatformDemo`**
@@ -1224,9 +1337,36 @@ Expected: commit succeeds with server route files staged.
 - Modify: `apps/web/src/App.tsx`
 - Modify: `apps/web/src/styles.css`
 
-- [ ] **Step 1: Add frontend types**
+- [ ] **Step 1: Add frontend auth and consultation types**
 
-In `apps/web/src/App.tsx`, add these types near the existing local types.
+In `apps/web/src/App.tsx`, update the existing auth/register local types so role selection and credential status are represented on the client.
+
+```ts
+type AuthRole = "user" | "clinician" | "organization" | "admin";
+
+type AuthUser = {
+  id: string;
+  role: AuthRole;
+  displayName: string;
+  profile?: UserProfile;
+  credentialStatus?: "pending" | "verified" | "rejected";
+  specialties?: string[];
+};
+
+type RegisterInput = UserProfile & {
+  accountRole: "user" | "clinician";
+  username: string;
+  password: string;
+  displayName: string;
+  inviteCode: string;
+  discipline?: string;
+  credentialSummary?: string;
+  specialties?: string[];
+  organizationName?: string;
+};
+```
+
+Then add these consultation types near the existing local types.
 
 ```ts
 type ConsultationStatus = "scheduled" | "waiting_clinician" | "active" | "expired" | "closed" | "cancelled";
@@ -1296,7 +1436,96 @@ type ConsultationSnapshot = {
 };
 ```
 
-- [ ] **Step 2: Add patient consultation state**
+- [ ] **Step 2: Add registration role selection**
+
+In `LoginScreen`, add clinician registration state next to the existing registration state:
+
+```ts
+  const [accountRole, setAccountRole] = useState<"user" | "clinician">("user");
+  const [discipline, setDiscipline] = useState("运动康复师");
+  const [credentialSummary, setCredentialSummary] = useState("");
+  const [specialtiesText, setSpecialtiesText] = useState("knee, running");
+  const [organizationName, setOrganizationName] = useState("");
+```
+
+Inside the registration branch of the form submit payload, include role-specific fields:
+
+```ts
+              ? onRegister({
+                  accountRole,
+                  username: username.trim(),
+                  password,
+                  inviteCode: inviteCode.trim(),
+                  displayName: displayName.trim(),
+                  heightCm: accountRole === "user" ? heightCm.trim() : "",
+                  weightKg: accountRole === "user" ? weightKg.trim() : "",
+                  discipline: accountRole === "clinician" ? discipline.trim() : undefined,
+                  credentialSummary: accountRole === "clinician" ? credentialSummary.trim() : undefined,
+                  specialties: accountRole === "clinician"
+                    ? specialtiesText.split(",").map((item) => item.trim()).filter(Boolean)
+                    : undefined,
+                  organizationName: accountRole === "clinician" ? organizationName.trim() : undefined,
+                })
+```
+
+Under the login/register segmented control, render a second segmented control only while registering:
+
+```tsx
+        {isRegistering ? (
+          <div className="role-switch account-role-switch" aria-label="注册身份">
+            <button className={accountRole === "user" ? "active" : ""} onClick={() => setAccountRole("user")} type="button">
+              患者
+            </button>
+            <button className={accountRole === "clinician" ? "active" : ""} onClick={() => setAccountRole("clinician")} type="button">
+              康复师/医生
+            </button>
+          </div>
+        ) : null}
+```
+
+In the registration field block, show height and weight only for patients and clinician credential fields only for clinicians:
+
+```tsx
+              {accountRole === "user" ? (
+                <div className="form-pair">
+                  <label>
+                    身高 cm
+                    <input value={heightCm} onChange={(event) => setHeightCm(event.target.value)} inputMode="numeric" />
+                  </label>
+                  <label>
+                    体重 kg
+                    <input value={weightKg} onChange={(event) => setWeightKg(event.target.value)} inputMode="decimal" />
+                  </label>
+                </div>
+              ) : (
+                <>
+                  <label>
+                    身份/职称
+                    <input value={discipline} onChange={(event) => setDiscipline(event.target.value)} />
+                  </label>
+                  <label>
+                    资质摘要
+                    <input value={credentialSummary} onChange={(event) => setCredentialSummary(event.target.value)} />
+                  </label>
+                  <label>
+                    专长标签
+                    <input value={specialtiesText} onChange={(event) => setSpecialtiesText(event.target.value)} />
+                  </label>
+                  <label>
+                    所属机构
+                    <input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} />
+                  </label>
+                </>
+              )}
+```
+
+Change the submit button label to:
+
+```tsx
+            {isLoggingIn ? "处理中..." : isRegistering ? "保存并进入" : "登录"}
+```
+
+- [ ] **Step 3: Add patient consultation state**
 
 Inside `App`, add:
 
@@ -1306,7 +1535,7 @@ Inside `App`, add:
   const [consultationError, setConsultationError] = useState("");
 ```
 
-- [ ] **Step 3: Add patient consultation functions**
+- [ ] **Step 4: Add patient consultation functions**
 
 Inside `App`, before the `if (!session)` return, add:
 
@@ -1401,7 +1630,7 @@ Inside `App`, before the `if (!session)` return, add:
   }
 ```
 
-- [ ] **Step 4: Render patient consultation panel**
+- [ ] **Step 5: Render patient consultation panel**
 
 In the right column `Panel title="咨询支持"` area or immediately after it, render:
 
@@ -1483,7 +1712,7 @@ function consultationStatusLabel(status: ConsultationStatus): string {
 }
 ```
 
-- [ ] **Step 5: Add patient styles**
+- [ ] **Step 6: Add patient styles**
 
 Append to `apps/web/src/styles.css`:
 
@@ -1570,7 +1799,7 @@ Append to `apps/web/src/styles.css`:
 }
 ```
 
-- [ ] **Step 6: Build web**
+- [ ] **Step 7: Build web**
 
 Run:
 
@@ -1580,7 +1809,7 @@ npm run build -w @mentis/web
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit patient UX**
+- [ ] **Step 8: Commit patient UX**
 
 Run:
 
@@ -1692,10 +1921,10 @@ Add this effect inside `App` after state declarations:
 
 ```ts
   useEffect(() => {
-    if (session?.user.role === "clinician") {
+    if (session?.user.role === "clinician" && session.user.credentialStatus === "verified") {
       void loadClinicianWorkbench();
     }
-  }, [session?.user.id, session?.user.role]);
+  }, [session?.user.id, session?.user.role, session?.user.credentialStatus]);
 ```
 
 - [ ] **Step 4: Render clinician workbench before patient app shell**
@@ -1703,7 +1932,17 @@ Add this effect inside `App` after state declarations:
 After the unauthenticated return and before the patient `<main className="app-page"...>`, add:
 
 ```tsx
-  if (session.user.role === "clinician") {
+  if (session.user.role === "clinician" && session.user.credentialStatus !== "verified") {
+    return (
+      <RoleStatusPage
+        displayName={displayName}
+        status={session.user.credentialStatus ?? "pending"}
+        onLogout={logout}
+      />
+    );
+  }
+
+  if (session.user.role === "clinician" && session.user.credentialStatus === "verified") {
     return (
       <main className="app-page" data-build-id={clientBuildId}>
         <header className="top-nav">
@@ -1806,6 +2045,46 @@ After the unauthenticated return and before the patient `<main className="app-pa
   }
 ```
 
+Add this component near `LoginScreen`:
+
+```tsx
+function RoleStatusPage({
+  displayName,
+  status,
+  onLogout,
+}: {
+  displayName: string;
+  status: "pending" | "verified" | "rejected";
+  onLogout: () => void;
+}) {
+  const isRejected = status === "rejected";
+  return (
+    <main className="login-page" data-build-id={clientBuildId}>
+      <section className="login-shell role-status-shell">
+        <div className="login-brand">
+          <div className="brand-mark">
+            <img src={rezLogo} alt="Mentis Rehab" />
+          </div>
+          <div>
+            <strong>{displayName}</strong>
+            <span>{isRejected ? "资质未通过" : "资质审核中"}</span>
+          </div>
+        </div>
+        <div className="login-copy">
+          <h1>{isRejected ? "暂不能进入康复师工作台" : "康复师/医生账号审核中"}</h1>
+          <p>
+            {isRejected
+              ? "请更新资质信息后重新提交审核。审核通过前不能被患者预约，也不能访问患者病例。"
+              : "审核通过后才能被患者预约，并进入只显示授权咨询患者的工作台。"}
+          </p>
+        </div>
+        <button className="login-submit" onClick={onLogout} type="button">退出登录</button>
+      </section>
+    </main>
+  );
+}
+```
+
 - [ ] **Step 5: Add clinician styles**
 
 Append:
@@ -1861,6 +2140,10 @@ Append:
   color: white;
   background: var(--orange);
   font-weight: 800;
+}
+
+.role-status-shell {
+  align-content: center;
 }
 
 @media (max-width: 860px) {
@@ -1995,7 +2278,7 @@ Expected: commit succeeds, or no commit is needed if verification required no fi
 
 ## Self-Review
 
-- Spec coverage: The plan covers session scheduling, simulated paid state, scoped authorization, limited clinician workbench, active 15-minute chat, clinician plan offer, patient accept/decline, action library, and first-phase SSE route.
+- Spec coverage: The plan covers role-aware registration, post-login workspace routing, pending clinician review pages, session scheduling, simulated paid state, scoped authorization, limited verified-clinician workbench, active 15-minute chat, clinician plan offer, patient accept/decline, action library, and first-phase SSE route.
 - Scope kept small: Real payments, persistent database, full calendar management, video, push notifications, and organization care teams are not part of the implementation tasks.
 - Type consistency: `ConsultationSession`, `ConsultationMessage`, `TrainingPlan`, `ActionLibraryItem`, and plan status/source values match across domain, API, and frontend tasks.
 - Transport boundary: SSE is used only in the server route and can be replaced later; the rest of the app talks to snapshots and REST actions.
