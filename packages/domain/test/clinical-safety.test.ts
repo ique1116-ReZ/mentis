@@ -13,12 +13,11 @@ import {
   expireConsultationSession,
   summarizeEvidence,
   type CaseRecord,
-  type CaseAuthorization,
   type Clinician,
   type ConsultationSession,
   type Organization,
   type User,
-} from "../src/index.ts";
+} from "../src/index";
 
 describe("clinical safety and case access", () => {
   it("escalates red-flag symptoms before generating rehab advice", () => {
@@ -159,9 +158,13 @@ describe("clinical safety and case access", () => {
       specialties: ["shoulder"],
     };
 
-    expect(canAccessAuthorizedCase(clinician, authorization, "case_1")).toBe(true);
-    expect(canAccessAuthorizedCase(otherClinician, authorization, "case_1")).toBe(false);
-    expect(canAccessAuthorizedCase(clinician, authorization, "case_2")).toBe(false);
+    expect(canAccessAuthorizedCase(clinician, authorization, "case_1", "2026-07-02T02:30:00.000Z")).toBe(true);
+    expect(canAccessAuthorizedCase(otherClinician, authorization, "case_1", "2026-07-02T02:30:00.000Z")).toBe(
+      false,
+    );
+    expect(canAccessAuthorizedCase(clinician, authorization, "case_2", "2026-07-02T02:30:00.000Z")).toBe(false);
+    expect(canAccessAuthorizedCase(clinician, authorization, "case_1", "2026-07-02T01:59:59.000Z")).toBe(false);
+    expect(canAccessAuthorizedCase(clinician, authorization, "case_1", "2026-07-02T03:00:00.000Z")).toBe(false);
   });
 
   it("opens a 15 minute consultation when both parties are present", () => {
@@ -187,6 +190,28 @@ describe("clinical safety and case access", () => {
     expect(canSendConsultationMessage(active, "2026-07-02T02:18:00.000Z")).toBe(false);
   });
 
+  it("keeps active consultation expiry fixed on repeated activation", () => {
+    const active: ConsultationSession = {
+      id: "consult_1",
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      caseId: "case_1",
+      status: "active",
+      paymentStatus: "paid",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+      activatedAt: "2026-07-02T02:03:00.000Z",
+      expiresAt: "2026-07-02T02:18:00.000Z",
+      durationMinutes: 15,
+      createdAt: "2026-07-02T01:50:00.000Z",
+    };
+
+    const rejoined = activateConsultationSession(active, "2026-07-02T02:10:00.000Z");
+
+    expect(rejoined).toBe(active);
+    expect(rejoined.expiresAt).toBe("2026-07-02T02:18:00.000Z");
+  });
+
   it("expires inactive or elapsed consultations and rejects chat", () => {
     const active: ConsultationSession = {
       id: "consult_1",
@@ -208,6 +233,29 @@ describe("clinical safety and case access", () => {
     expect(expired.status).toBe("expired");
     expect(expired.closedAt).toBe("2026-07-02T02:20:00.000Z");
     expect(canSendConsultationMessage(expired, "2026-07-02T02:20:01.000Z")).toBe(false);
+  });
+
+  it("requires a paid active consultation window before chat is allowed", () => {
+    const active: ConsultationSession = {
+      id: "consult_1",
+      patientUserId: "user_1",
+      clinicianId: "clinician_1",
+      caseId: "case_1",
+      status: "active",
+      paymentStatus: "paid",
+      scheduledStartAt: "2026-07-02T02:00:00.000Z",
+      scheduledEndAt: "2026-07-02T02:30:00.000Z",
+      activatedAt: "2026-07-02T02:03:00.000Z",
+      expiresAt: "2026-07-02T02:18:00.000Z",
+      durationMinutes: 15,
+      createdAt: "2026-07-02T01:50:00.000Z",
+    };
+
+    expect(canSendConsultationMessage(active, "2026-07-02T02:02:59.000Z")).toBe(false);
+    expect(canSendConsultationMessage({ ...active, paymentStatus: "unpaid" }, "2026-07-02T02:04:00.000Z")).toBe(
+      false,
+    );
+    expect(canSendConsultationMessage(active, "2026-07-02T02:18:00.000Z")).toBe(false);
   });
 
   it("keeps AI and clinician plans as separate patient-confirmed records", () => {

@@ -370,15 +370,23 @@ export function canAccessAuthorizedCase(
   actor: PlatformActor,
   authorization: CaseAuthorization,
   caseId: string,
+  at = new Date().toISOString(),
 ): boolean {
-  if (actor.role === "admin") {
-    return true;
-  }
   if (authorization.revokedAt) {
     return false;
   }
   if (caseId !== authorization.caseId) {
     return false;
+  }
+  const accessTime = new Date(at).getTime();
+  if (
+    accessTime < new Date(authorization.startsAt).getTime() ||
+    accessTime >= new Date(authorization.endsAt).getTime()
+  ) {
+    return false;
+  }
+  if (actor.role === "admin") {
+    return true;
   }
   if (actor.role === "user") {
     return actor.id === authorization.patientUserId;
@@ -393,6 +401,9 @@ export function activateConsultationSession(
   session: ConsultationSession,
   activatedAt = new Date().toISOString(),
 ): ConsultationSession {
+  if (session.status === "active") {
+    return session;
+  }
   if (session.paymentStatus !== "paid") {
     throw new Error("Consultation must be paid before activation");
   }
@@ -427,10 +438,19 @@ export function canSendConsultationMessage(
   session: ConsultationSession,
   at = new Date().toISOString(),
 ): boolean {
-  if (session.status !== "active" || !session.expiresAt) {
+  if (
+    session.status !== "active" ||
+    session.paymentStatus !== "paid" ||
+    !session.activatedAt ||
+    !session.expiresAt
+  ) {
     return false;
   }
-  return new Date(at).getTime() < new Date(session.expiresAt).getTime();
+  const messageTime = new Date(at).getTime();
+  return (
+    messageTime >= new Date(session.activatedAt).getTime() &&
+    messageTime < new Date(session.expiresAt).getTime()
+  );
 }
 
 export function createTrainingPlan(input: TrainingPlan): TrainingPlan {
