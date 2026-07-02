@@ -408,6 +408,9 @@ export function activateConsultationSession(
   session: ConsultationSession,
   activatedAt = new Date().toISOString(),
 ): ConsultationSession {
+  if (!Number.isFinite(session.durationMinutes) || session.durationMinutes <= 0) {
+    throw new Error("Consultation duration must be positive");
+  }
   if (session.status === "active") {
     return session;
   }
@@ -416,9 +419,6 @@ export function activateConsultationSession(
   }
   if (session.status === "cancelled" || session.status === "closed" || session.status === "expired") {
     throw new Error(`Cannot activate consultation with status ${session.status}`);
-  }
-  if (!Number.isFinite(session.durationMinutes) || session.durationMinutes <= 0) {
-    throw new Error("Consultation duration must be positive");
   }
 
   const activatedAtTime = toFiniteTime(activatedAt);

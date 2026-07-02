@@ -263,6 +263,18 @@ describe("clinical safety and case access", () => {
     expect(() =>
       activateConsultationSession({ ...session, durationMinutes: Number.NaN }, "2026-07-02T02:03:00.000Z"),
     ).toThrow("Consultation duration must be positive");
+    expect(() =>
+      activateConsultationSession(
+        {
+          ...session,
+          status: "active",
+          activatedAt: "2026-07-02T02:03:00.000Z",
+          expiresAt: "2026-07-02T02:18:00.000Z",
+          durationMinutes: 0,
+        },
+        "2026-07-02T02:10:00.000Z",
+      ),
+    ).toThrow("Consultation duration must be positive");
   });
 
   it("rejects consultation activation outside the scheduled window", () => {
