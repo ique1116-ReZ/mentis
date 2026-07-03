@@ -25,7 +25,7 @@ import {
 } from "@mentis/domain";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join, parse, resolve } from "node:path";
-import { importedExerciseLibrary } from "./exercise-library.generated";
+import { importedExerciseLibrary } from "./exercise-library.generated.js";
 
 export interface PlatformDemo {
   users: User[];
