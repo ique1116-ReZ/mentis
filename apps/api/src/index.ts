@@ -13,8 +13,11 @@ import {
   type AuditEvent,
   type CaseAuthorization,
   type Clinician,
+  type ClinicianAvailabilitySlot,
   type ConsultationMessage,
+  type ConsultationPaymentMode,
   type ConsultationSession,
+  type PlatformActor,
   type RehabPlan,
   type TriageResult,
   type TrainingPlan,
@@ -22,10 +25,12 @@ import {
 } from "@mentis/domain";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join, parse, resolve } from "node:path";
+import { importedExerciseLibrary } from "./exercise-library.generated";
 
 export interface PlatformDemo {
   users: User[];
   clinicians: DemoClinician[];
+  admins: DemoAdmin[];
   demoCredentials: DemoCredential[];
   userMemories: Record<string, UserMemory>;
   consultations: ConsultationSession[];
@@ -33,6 +38,8 @@ export interface PlatformDemo {
   consultationMessages: ConsultationMessage[];
   trainingPlans: TrainingPlan[];
   actionLibrary: ActionLibraryItem[];
+  clinicianAvailabilitySlots: ClinicianAvailabilitySlot[];
+  clinicianPresence: Record<string, ClinicianPresenceStatus>;
   presence: Record<string, ConsultationPresence>;
   demoSessions: Record<string, DemoSessionRecord>;
 }
@@ -50,10 +57,18 @@ export type DemoClinician = Clinician & {
   discipline?: string;
   credentialSummary?: string;
   organizationName?: string;
+  publicDirectoryVisible?: boolean;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  reviewNote?: string;
   registeredAt?: string;
 };
 
-export type AuthenticatedActor = ProfiledUser | DemoClinician;
+export type DemoAdmin = PlatformActor & {
+  role: "admin";
+};
+
+export type AuthenticatedActor = ProfiledUser | DemoClinician | DemoAdmin;
 
 export type AssessmentWorkflowInput = Omit<Assessment, "createdAt"> & {
   userId: string;
@@ -63,12 +78,12 @@ export interface DemoCredential {
   username: string;
   password: string;
   actorId: string;
-  actorRole: "user" | "clinician";
+  actorRole: "user" | "clinician" | "admin";
 }
 
 export interface DemoSessionRecord {
   actorId: string;
-  actorRole: "user" | "clinician";
+  actorRole: "user" | "clinician" | "admin";
 }
 
 export interface LoginInput {
@@ -140,9 +155,60 @@ export interface ConsultationPresence {
   clinicianPresent: boolean;
 }
 
+export interface ClinicianPresenceStatus {
+  isOnline: boolean;
+  lastSeenAt: string;
+}
+
+export interface ClinicianDirectoryEntry {
+  id: string;
+  displayName: string;
+  discipline?: string;
+  credentialSummary?: string;
+  organizationName?: string;
+  specialties: string[];
+  isOnline: boolean;
+  nextAvailableAt?: string;
+}
+
+export interface AdminClinicianReviewItem {
+  id: string;
+  displayName: string;
+  discipline?: string;
+  credentialSummary?: string;
+  organizationName?: string;
+  specialties: string[];
+  credentialStatus: DemoClinician["credentialStatus"];
+  publicDirectoryVisible: boolean;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  reviewNote?: string;
+  registeredAt?: string;
+}
+
+export interface AdminClinicianReviewInput {
+  credentialStatus: DemoClinician["credentialStatus"];
+  publicDirectoryVisible?: boolean;
+  reviewedAt?: string;
+  reviewNote?: string;
+}
+
+export interface AvailabilitySlotInput {
+  startsAt: string;
+  endsAt: string;
+  createdAt?: string;
+}
+
 export interface ConsultationMessageInput {
   content: string;
   createdAt?: string;
+}
+
+export interface ConsultationPaymentInput {
+  paymentMode?: ConsultationPaymentMode;
+  paymentStatus?: ConsultationSession["paymentStatus"];
+  paymentAmountCents?: number;
+  paymentOrderId?: string;
 }
 
 export interface AssessmentWorkflowResult {
@@ -286,6 +352,7 @@ export function resolveCorsOrigin(
 export function createPlatformDemo(): PlatformDemo {
   return {
     users: [{ id: "user_1", role: "user", displayName: "张运动" }],
+    admins: [{ id: "admin_1", role: "admin", displayName: "平台管理员" }],
     clinicians: [
       {
         id: "clinician_1",
@@ -293,6 +360,10 @@ export function createPlatformDemo(): PlatformDemo {
         displayName: "李康复师",
         credentialStatus: "verified",
         specialties: ["knee", "running"],
+        discipline: "运动康复师",
+        credentialSummary: "跑步损伤与膝关节负荷管理",
+        organizationName: "Mentis Rehab",
+        publicDirectoryVisible: false,
       },
     ],
     demoCredentials: [
@@ -302,6 +373,12 @@ export function createPlatformDemo(): PlatformDemo {
         password: "mentis_clinician",
         actorId: "clinician_1",
         actorRole: "clinician",
+      },
+      {
+        username: "admin_demo",
+        password: "mentis_admin",
+        actorId: "admin_1",
+        actorRole: "admin",
       },
     ],
     userMemories: {
@@ -318,13 +395,33 @@ export function createPlatformDemo(): PlatformDemo {
     consultationMessages: [],
     trainingPlans: [],
     actionLibrary: buildSeedActionLibrary(),
+    clinicianAvailabilitySlots: buildSeedAvailabilitySlots("clinician_1"),
+    clinicianPresence: {
+      clinician_1: {
+        isOnline: true,
+        lastSeenAt: new Date().toISOString(),
+      },
+    },
     presence: {},
     demoSessions: {},
   };
 }
 
+function buildSeedAvailabilitySlots(clinicianId: string): ClinicianAvailabilitySlot[] {
+  const now = new Date();
+  const slotStarts = [1, 3, 26].map((hoursAhead) => new Date(now.getTime() + hoursAhead * 60 * 60 * 1000));
+  return slotStarts.map((startsAt, index) => ({
+    id: `slot_seed_${index + 1}`,
+    clinicianId,
+    startsAt: startsAt.toISOString(),
+    endsAt: new Date(startsAt.getTime() + 30 * 60 * 1000).toISOString(),
+    status: "available",
+    createdAt: now.toISOString(),
+  }));
+}
+
 function buildSeedActionLibrary(): ActionLibraryItem[] {
-  return [
+  const rehabSeedActions: ActionLibraryItem[] = [
     {
       id: "action_quad_iso",
       title: "股四头肌等长收缩",
@@ -348,6 +445,8 @@ function buildSeedActionLibrary(): ActionLibraryItem[] {
       tags: ["膝盖", "股四头肌", "静态"],
     },
   ];
+
+  return [...rehabSeedActions, ...importedExerciseLibrary];
 }
 
 function getDemoCredentials(): DemoCredential[] {
@@ -376,6 +475,15 @@ export function authenticateDemoUser(platform: PlatformDemo, input: LoginInput):
     }
 
     return createAuthenticatedSession(platform, clinician, emptyUserMemory(clinician.id));
+  }
+
+  if (credential.actorRole === "admin") {
+    const admin = platform.admins.find((candidate) => candidate.id === credential.actorId);
+    if (!admin) {
+      throw new Error(`Unknown admin: ${credential.actorId}`);
+    }
+
+    return createAuthenticatedSession(platform, admin, emptyUserMemory(admin.id));
   }
 
   const user = platform.users.find((candidate) => candidate.id === credential.actorId) as ProfiledUser | undefined;
@@ -417,6 +525,7 @@ export function registerDemoUser(platform: PlatformDemo, input: RegistrationInpu
       discipline: trimRegistrationField(input.discipline) || undefined,
       credentialSummary: trimRegistrationField(input.credentialSummary) || undefined,
       organizationName: trimRegistrationField(input.organizationName) || undefined,
+      publicDirectoryVisible: false,
       registeredAt: new Date().toISOString(),
     };
 
@@ -473,7 +582,7 @@ function createAuthenticatedSession(
 function resolveActorById(
   platform: PlatformDemo,
   actorId: string,
-  actorRole: "user" | "clinician",
+  actorRole: "user" | "clinician" | "admin",
 ): AuthenticatedActor {
   if (actorRole === "clinician") {
     const clinician = platform.clinicians.find((candidate) => candidate.id === actorId);
@@ -481,6 +590,14 @@ function resolveActorById(
       throw new Error(`Unknown clinician: ${actorId}`);
     }
     return clinician;
+  }
+
+  if (actorRole === "admin") {
+    const admin = platform.admins.find((candidate) => candidate.id === actorId);
+    if (!admin) {
+      throw new Error(`Unknown admin: ${actorId}`);
+    }
+    return admin;
   }
 
   const user = platform.users.find((candidate) => candidate.id === actorId) as ProfiledUser | undefined;
@@ -585,14 +702,177 @@ export interface ConsultationCreateInput {
   scheduledStartAt: string;
   scheduledEndAt: string;
   createdAt?: string;
+  payment?: ConsultationPaymentInput;
 }
 
 export interface ConsultationSnapshot {
   session: ConsultationSession;
   authorization: CaseAuthorization;
+  patient: Pick<ProfiledUser, "id" | "displayName" | "profile">;
+  caseSummary?: MemoryCaseSummary;
   messages: ConsultationMessage[];
   plans: TrainingPlan[];
   actionLibrary: ActionLibraryItem[];
+}
+
+function isPublicDirectoryClinician(clinician: DemoClinician) {
+  return clinician.credentialStatus === "verified" && clinician.publicDirectoryVisible !== false;
+}
+
+function toAdminClinicianReviewItem(clinician: DemoClinician): AdminClinicianReviewItem {
+  return {
+    id: clinician.id,
+    displayName: clinician.displayName,
+    discipline: clinician.discipline,
+    credentialSummary: clinician.credentialSummary,
+    organizationName: clinician.organizationName,
+    specialties: clinician.specialties,
+    credentialStatus: clinician.credentialStatus,
+    publicDirectoryVisible: clinician.publicDirectoryVisible !== false,
+    reviewedAt: clinician.reviewedAt,
+    reviewedBy: clinician.reviewedBy,
+    reviewNote: clinician.reviewNote,
+    registeredAt: clinician.registeredAt,
+  };
+}
+
+export function listAdminClinicianReviews(platform: PlatformDemo, actor: AuthenticatedActor): AdminClinicianReviewItem[] {
+  if (actor.role !== "admin") {
+    throw new Error("Admin access denied");
+  }
+  return platform.clinicians
+    .map(toAdminClinicianReviewItem)
+    .sort((left, right) => {
+      if (left.credentialStatus === "pending" && right.credentialStatus !== "pending") {
+        return -1;
+      }
+      if (left.credentialStatus !== "pending" && right.credentialStatus === "pending") {
+        return 1;
+      }
+      return (right.registeredAt ?? "").localeCompare(left.registeredAt ?? "");
+    });
+}
+
+export function reviewClinicianCredential(
+  platform: PlatformDemo,
+  clinicianId: string,
+  actor: AuthenticatedActor,
+  input: AdminClinicianReviewInput,
+): AdminClinicianReviewItem {
+  if (actor.role !== "admin") {
+    throw new Error("Admin access denied");
+  }
+  const clinician = platform.clinicians.find((candidate) => candidate.id === clinicianId);
+  if (!clinician) {
+    throw new Error(`Unknown clinician: ${clinicianId}`);
+  }
+  const reviewedAt = input.reviewedAt ? requireCanonicalIso(input.reviewedAt, "reviewedAt") : new Date().toISOString();
+  const publicDirectoryVisible =
+    input.credentialStatus === "verified"
+      ? input.publicDirectoryVisible ?? true
+      : false;
+  const reviewed: DemoClinician = {
+    ...clinician,
+    credentialStatus: input.credentialStatus,
+    publicDirectoryVisible,
+    reviewedAt,
+    reviewedBy: actor.id,
+    reviewNote: trimRegistrationField(input.reviewNote) || undefined,
+  };
+  platform.clinicians = platform.clinicians.map((candidate) => (candidate.id === clinicianId ? reviewed : candidate));
+  return toAdminClinicianReviewItem(reviewed);
+}
+
+export function listClinicians(platform: PlatformDemo, at = new Date().toISOString()): ClinicianDirectoryEntry[] {
+  const accessAt = requireCanonicalIso(at, "at");
+  return platform.clinicians
+    .filter(isPublicDirectoryClinician)
+    .map((clinician) => {
+      const nextSlot = platform.clinicianAvailabilitySlots
+        .filter(
+          (slot) =>
+            slot.clinicianId === clinician.id &&
+            slot.status === "available" &&
+            new Date(slot.startsAt).getTime() >= new Date(accessAt).getTime(),
+        )
+        .sort((left, right) => left.startsAt.localeCompare(right.startsAt))[0];
+      const presence = platform.clinicianPresence[clinician.id];
+      return {
+        id: clinician.id,
+        displayName: clinician.displayName,
+        discipline: clinician.discipline,
+        credentialSummary: clinician.credentialSummary,
+        organizationName: clinician.organizationName,
+        specialties: clinician.specialties,
+        isOnline: Boolean(presence?.isOnline),
+        nextAvailableAt: nextSlot?.startsAt,
+      };
+    });
+}
+
+export function listClinicianAvailability(
+  platform: PlatformDemo,
+  clinicianId: string,
+  options: { includeBooked?: boolean; publicOnly?: boolean; at?: string } = {},
+): ClinicianAvailabilitySlot[] {
+  const accessAt = options.at ? requireCanonicalIso(options.at, "at") : new Date().toISOString();
+  const clinician = platform.clinicians.find((candidate) => candidate.id === clinicianId);
+  if (!clinician || clinician.credentialStatus !== "verified") {
+    throw new Error("Unknown verified clinician");
+  }
+  if (options.publicOnly && !isPublicDirectoryClinician(clinician)) {
+    throw new Error("Unknown public clinician");
+  }
+  return platform.clinicianAvailabilitySlots
+    .filter((slot) => {
+      if (slot.clinicianId !== clinicianId) {
+        return false;
+      }
+      if (!options.includeBooked && slot.status !== "available") {
+        return false;
+      }
+      return new Date(slot.endsAt).getTime() >= new Date(accessAt).getTime();
+    })
+    .sort((left, right) => left.startsAt.localeCompare(right.startsAt));
+}
+
+export function createClinicianAvailabilitySlot(
+  platform: PlatformDemo,
+  clinicianId: string,
+  actor: AuthenticatedActor,
+  input: AvailabilitySlotInput,
+): ClinicianAvailabilitySlot {
+  const resolvedActor = resolveFreshConsultationActor(platform, actor);
+  if (resolvedActor.role !== "clinician" || resolvedActor.id !== clinicianId) {
+    throw new Error("Clinician availability access denied");
+  }
+  requireVerifiedClinicianForConsultation(resolvedActor);
+  const startsAt = requireCanonicalIso(input.startsAt, "startsAt");
+  const endsAt = requireCanonicalIso(input.endsAt, "endsAt");
+  if (new Date(startsAt).getTime() >= new Date(endsAt).getTime()) {
+    throw new Error("Availability endsAt must be after startsAt");
+  }
+  if (
+    platform.clinicianAvailabilitySlots.some(
+      (slot) => slot.clinicianId === clinicianId && slot.status !== "blocked" && rangesOverlap(startsAt, endsAt, slot.startsAt, slot.endsAt),
+    )
+  ) {
+    throw new Error("Availability slot overlaps existing schedule");
+  }
+  const createdAt = input.createdAt ? requireCanonicalIso(input.createdAt, "createdAt") : new Date().toISOString();
+  const slot: ClinicianAvailabilitySlot = {
+    id: `slot_${demoTokenId()}`,
+    clinicianId,
+    startsAt,
+    endsAt,
+    status: "available",
+    createdAt,
+  };
+  platform.clinicianAvailabilitySlots = [
+    slot,
+    ...platform.clinicianAvailabilitySlots.filter((candidate) => candidate.id !== slot.id),
+  ];
+  return slot;
 }
 
 export function createConsultationSession(platform: PlatformDemo, input: ConsultationCreateInput): ConsultationSession {
@@ -615,13 +895,18 @@ export function createConsultationSession(platform: PlatformDemo, input: Consult
   }
 
   const now = input.createdAt ? requireCanonicalIso(input.createdAt, "createdAt") : new Date().toISOString();
+  const paymentMode = input.payment?.paymentMode ?? "free_test";
+  const paymentStatus = input.payment?.paymentStatus ?? (paymentMode === "free_test" ? "waived" : "unpaid");
   const session: ConsultationSession = {
     id: `consult_${demoTokenId()}`,
     patientUserId: input.patientUserId,
     clinicianId: input.clinicianId,
     caseId: input.caseId,
     status: "scheduled",
-    paymentStatus: "paid",
+    paymentStatus,
+    paymentMode,
+    paymentAmountCents: input.payment?.paymentAmountCents,
+    paymentOrderId: input.payment?.paymentOrderId,
     scheduledStartAt,
     scheduledEndAt,
     durationMinutes: 15,
@@ -660,8 +945,47 @@ export function createConsultationSession(platform: PlatformDemo, input: Consult
   return session;
 }
 
+export function bookConsultationFromAvailability(
+  platform: PlatformDemo,
+  input: { patientUserId: string; caseId: string; availabilitySlotId: string; createdAt?: string; payment?: ConsultationPaymentInput },
+): ConsultationSession {
+  const slot = platform.clinicianAvailabilitySlots.find((candidate) => candidate.id === input.availabilitySlotId);
+  if (!slot) {
+    throw new Error(`Unknown availability slot: ${input.availabilitySlotId}`);
+  }
+  if (slot.status !== "available") {
+    throw new Error("Availability slot is not bookable");
+  }
+  const clinician = platform.clinicians.find((candidate) => candidate.id === slot.clinicianId);
+  if (!clinician || !isPublicDirectoryClinician(clinician)) {
+    throw new Error("Availability slot is not public");
+  }
+  const session = createConsultationSession(platform, {
+    patientUserId: input.patientUserId,
+    clinicianId: slot.clinicianId,
+    caseId: input.caseId,
+    scheduledStartAt: slot.startsAt,
+    scheduledEndAt: slot.endsAt,
+    createdAt: input.createdAt,
+    payment: input.payment,
+  });
+  const bookedSlot: ClinicianAvailabilitySlot = {
+    ...slot,
+    status: "booked",
+    bookedConsultationSessionId: session.id,
+  };
+  platform.clinicianAvailabilitySlots = platform.clinicianAvailabilitySlots.map((candidate) =>
+    candidate.id === slot.id ? bookedSlot : candidate,
+  );
+  return session;
+}
+
 export function getClinicianConsultations(platform: PlatformDemo, clinicianId: string): ConsultationSession[] {
   return platform.consultations.filter((session) => session.clinicianId === clinicianId);
+}
+
+export function getPatientConsultations(platform: PlatformDemo, patientUserId: string): ConsultationSession[] {
+  return platform.consultations.filter((session) => session.patientUserId === patientUserId);
 }
 
 export function getConsultationSnapshot(
@@ -682,6 +1006,10 @@ export function getConsultationSnapshot(
   return {
     session,
     authorization,
+    patient: pickPatientSnapshot(platform, session.patientUserId),
+    caseSummary: platform.userMemories[session.patientUserId]?.cases.find(
+      (patientCase) => patientCase.id === session.caseId,
+    ),
     messages: platform.consultationMessages
       .filter((message) => message.consultationSessionId === sessionId)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
@@ -748,7 +1076,7 @@ export function sendConsultationMessage(
     id: `msg_${demoTokenId()}`,
     consultationSessionId: sessionId,
     senderId: resolvedActor.id,
-    senderRole: resolvedActor.role,
+    senderRole: resolvedActor.role === "clinician" ? "clinician" : "user",
     content: input.content.trim(),
     kind: "text",
     createdAt,
@@ -895,6 +1223,21 @@ export function declineConsultationPlan(
   return declined;
 }
 
+function pickPatientSnapshot(
+  platform: PlatformDemo,
+  patientUserId: string,
+): Pick<ProfiledUser, "id" | "displayName" | "profile"> {
+  const patient = platform.users.find((candidate) => candidate.id === patientUserId) as ProfiledUser | undefined;
+  if (!patient) {
+    throw new Error(`Unknown patient: ${patientUserId}`);
+  }
+  return {
+    id: patient.id,
+    displayName: patient.displayName,
+    profile: patient.profile,
+  };
+}
+
 function requireConsultation(platform: PlatformDemo, sessionId: string): ConsultationSession {
   const session = platform.consultations.find((candidate) => candidate.id === sessionId);
   if (!session) {
@@ -942,6 +1285,13 @@ function replaceConsultation(platform: PlatformDemo, session: ConsultationSessio
 function addDaysIso(value: string, days: number): string {
   const date = new Date(value);
   return new Date(date.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function rangesOverlap(leftStart: string, leftEnd: string, rightStart: string, rightEnd: string): boolean {
+  return (
+    new Date(leftStart).getTime() < new Date(rightEnd).getTime() &&
+    new Date(rightStart).getTime() < new Date(leftEnd).getTime()
+  );
 }
 
 function requireCanonicalIso(value: string, label: string): string {
@@ -1008,7 +1358,7 @@ export async function runAssessmentWorkflow(
         available: true,
         reason: "检测到红旗风险，建议优先线下就医或联系医生/康复师。",
         clinicianIds: platform.clinicians
-          .filter((clinician) => clinician.credentialStatus === "verified")
+          .filter(isPublicDirectoryClinician)
           .map((clinician) => clinician.id),
       },
       auditEvents,
@@ -1036,7 +1386,7 @@ export async function runAssessmentWorkflow(
       available: true,
       reason: "可预约医生/康复师复核 AI 康复草案。",
       clinicianIds: platform.clinicians
-        .filter((clinician) => clinician.credentialStatus === "verified")
+        .filter(isPublicDirectoryClinician)
         .map((clinician) => clinician.id),
     },
     auditEvents,

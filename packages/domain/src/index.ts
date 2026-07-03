@@ -12,7 +12,7 @@ export interface User extends PlatformActor {
 
 export interface Clinician extends PlatformActor {
   role: "clinician";
-  credentialStatus: "pending" | "verified" | "rejected";
+  credentialStatus: "pending" | "verified" | "rejected" | "suspended";
   specialties: string[];
 }
 
@@ -83,7 +83,19 @@ export interface CaseRecord {
 }
 
 export type ConsultationStatus = "scheduled" | "waiting_clinician" | "active" | "expired" | "closed" | "cancelled";
-export type ConsultationPaymentStatus = "unpaid" | "paid" | "refunded";
+export type ConsultationPaymentStatus = "unpaid" | "paid" | "waived" | "refunded";
+export type ConsultationPaymentMode = "free_test" | "paid";
+export type ClinicianAvailabilityStatus = "available" | "booked" | "blocked";
+
+export interface ClinicianAvailabilitySlot {
+  id: string;
+  clinicianId: string;
+  startsAt: string;
+  endsAt: string;
+  status: ClinicianAvailabilityStatus;
+  createdAt: string;
+  bookedConsultationSessionId?: string;
+}
 
 export interface ConsultationSession {
   id: string;
@@ -92,6 +104,9 @@ export interface ConsultationSession {
   caseId: string;
   status: ConsultationStatus;
   paymentStatus: ConsultationPaymentStatus;
+  paymentMode: ConsultationPaymentMode;
+  paymentAmountCents?: number;
+  paymentOrderId?: string;
   scheduledStartAt: string;
   scheduledEndAt: string;
   activatedAt?: string;
@@ -414,7 +429,7 @@ export function activateConsultationSession(
   if (session.status === "active") {
     return session;
   }
-  if (session.paymentStatus !== "paid") {
+  if (session.paymentStatus !== "paid" && session.paymentStatus !== "waived") {
     throw new Error("Consultation must be paid before activation");
   }
   if (session.status === "cancelled" || session.status === "closed" || session.status === "expired") {
@@ -465,7 +480,7 @@ export function canSendConsultationMessage(
 ): boolean {
   if (
     session.status !== "active" ||
-    session.paymentStatus !== "paid" ||
+    (session.paymentStatus !== "paid" && session.paymentStatus !== "waived") ||
     !session.activatedAt ||
     !session.expiresAt
   ) {

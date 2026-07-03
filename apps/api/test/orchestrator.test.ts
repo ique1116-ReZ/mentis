@@ -8,7 +8,9 @@ import {
   buildChatSystemPrompt,
   buildChatRagContext,
   buildGuidedChatResponse,
+  bookConsultationFromAvailability,
   chatWithQwen,
+  createClinicianAvailabilitySlot,
   createClinicianPlanForConsultation,
   createConsultationSession,
   createPlatformDemo,
@@ -17,11 +19,15 @@ import {
   getClinicianConsultations,
   getConsultationSnapshot,
   joinConsultationSession,
+  listAdminClinicianReviews,
   listActionLibrary,
+  listClinicianAvailability,
+  listClinicians,
   rememberCase,
   rememberTrainingPlan,
   registerDemoUser,
   resolveAuthenticatedActor,
+  reviewClinicianCredential,
   runAssessmentWorkflow,
   searchLocalRag,
   sendConsultationMessage,
@@ -208,6 +214,7 @@ describe("consultation orchestration", () => {
     expect(clinician.user.role).toBe("clinician");
     expect(clinician.user).toMatchObject({
       credentialStatus: "pending",
+      publicDirectoryVisible: false,
       specialties: ["knee", "running"],
     });
     expect(clinician.memory.notes).toEqual([]);
@@ -226,6 +233,9 @@ describe("consultation orchestration", () => {
       weightKg: "",
       specialties: ["knee"],
     });
+    platform.clinicians = platform.clinicians.map((candidate) =>
+      candidate.id === clinician.user.id ? { ...candidate, credentialStatus: "pending" as const } : candidate,
+    );
 
     expect(() =>
       createConsultationSession(platform, {
@@ -238,7 +248,55 @@ describe("consultation orchestration", () => {
     ).toThrow("Consultation clinician must be verified");
   });
 
-  it("creates paid sessions and shows clinicians only their assigned consultations", () => {
+  it("lets admins review clinicians before they appear in the patient directory", () => {
+    const platform = createPlatformDemo();
+    const clinician = registerDemoUser(platform, {
+      accountRole: "clinician",
+      username: "review_target",
+      password: "secret",
+      displayName: "待审核真实康复师",
+      inviteCode: "ique1116",
+      heightCm: "",
+      weightKg: "",
+      discipline: "运动康复师",
+      credentialSummary: "跑步损伤康复",
+      specialties: ["knee", "running"],
+      organizationName: "个人执业",
+    });
+    const adminSession = authenticateDemoUser(platform, {
+      username: "admin_demo",
+      password: "mentis_admin",
+    });
+    const adminActor = resolveAuthenticatedActor(platform, adminSession.token);
+
+    expect(adminActor.role).toBe("admin");
+    expect(listClinicians(platform).map((candidate) => candidate.id)).not.toContain(clinician.user.id);
+    expect(listAdminClinicianReviews(platform, adminActor)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: clinician.user.id,
+          credentialStatus: "pending",
+          publicDirectoryVisible: false,
+        }),
+      ]),
+    );
+
+    const reviewed = reviewClinicianCredential(platform, clinician.user.id, adminActor, {
+      credentialStatus: "verified",
+      publicDirectoryVisible: true,
+      reviewedAt: "2026-07-02T02:00:00.000Z",
+      reviewNote: "资料完整，允许测试接诊。",
+    });
+
+    expect(reviewed).toMatchObject({
+      credentialStatus: "verified",
+      publicDirectoryVisible: true,
+      reviewedBy: "admin_1",
+    });
+    expect(listClinicians(platform).map((candidate) => candidate.id)).toContain(clinician.user.id);
+  });
+
+  it("creates free-test sessions and shows clinicians only their assigned consultations", () => {
     const platform = createPlatformDemo();
     const session = createConsultationSession(platform, {
       patientUserId: "user_1",
@@ -248,12 +306,132 @@ describe("consultation orchestration", () => {
       scheduledEndAt: "2026-07-02T02:30:00.000Z",
     });
 
-    expect(session.paymentStatus).toBe("paid");
+    expect(session.paymentMode).toBe("free_test");
+    expect(session.paymentStatus).toBe("waived");
     expect(session.durationMinutes).toBe(15);
     expect(getClinicianConsultations(platform, "clinician_1").map((candidate) => candidate.id)).toEqual([
       session.id,
     ]);
     expect(getClinicianConsultations(platform, "clinician_missing")).toHaveLength(0);
+  });
+
+  it("lists real clinicians with online state and available slots", () => {
+    const platform = createPlatformDemo();
+
+    expect(listClinicians(platform, "2026-07-02T02:00:00.000Z").map((clinician) => clinician.id)).not.toContain(
+      "clinician_1",
+    );
+    expect(() =>
+      listClinicianAvailability(platform, "clinician_1", {
+        publicOnly: true,
+        at: "2026-07-02T02:00:00.000Z",
+      }),
+    ).toThrow("Unknown public clinician");
+    expect(listClinicianAvailability(platform, "clinician_1", {
+      at: "2026-07-02T02:00:00.000Z",
+    }).every((slot) => slot.status === "available")).toBe(true);
+
+    const registered = registerDemoUser(platform, {
+      accountRole: "clinician",
+      username: "public_clinician",
+      password: "secret",
+      displayName: "真实康复师",
+      inviteCode: "ique1116",
+      heightCm: "",
+      weightKg: "",
+      discipline: "运动康复师",
+      credentialSummary: "跑步损伤康复",
+      specialties: ["knee", "running"],
+      organizationName: "个人执业",
+    });
+    platform.clinicians = platform.clinicians.map((clinician) =>
+      clinician.id === registered.user.id
+        ? { ...clinician, credentialStatus: "verified" as const, publicDirectoryVisible: true }
+        : clinician,
+    );
+    const publicClinician = platform.clinicians.find((clinician) => clinician.id === registered.user.id)!;
+    platform.clinicianPresence[publicClinician.id] = {
+      isOnline: true,
+      lastSeenAt: "2026-07-02T02:00:00.000Z",
+    };
+    createClinicianAvailabilitySlot(platform, publicClinician.id, publicClinician, {
+      startsAt: "2026-07-02T12:00:00.000Z",
+      endsAt: "2026-07-02T12:30:00.000Z",
+      createdAt: "2026-07-02T02:00:00.000Z",
+    });
+
+    const clinicians = listClinicians(platform, "2026-07-02T02:00:00.000Z");
+    const slots = listClinicianAvailability(platform, publicClinician.id, {
+      publicOnly: true,
+      at: "2026-07-02T02:00:00.000Z",
+    });
+    expect(clinicians).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: publicClinician.id,
+          displayName: "真实康复师",
+          isOnline: true,
+        }),
+      ]),
+    );
+    expect(slots.every((slot) => slot.status === "available")).toBe(true);
+  });
+
+  it("lets verified clinicians create non-overlapping availability and patients book a slot once", () => {
+    const platform = createPlatformDemo();
+    const registered = registerDemoUser(platform, {
+      accountRole: "clinician",
+      username: "bookable_clinician",
+      password: "secret",
+      displayName: "可预约康复师",
+      inviteCode: "ique1116",
+      heightCm: "",
+      weightKg: "",
+      discipline: "运动康复师",
+      credentialSummary: "膝关节康复",
+      specialties: ["knee"],
+      organizationName: "个人执业",
+    });
+    platform.clinicians = platform.clinicians.map((clinician) =>
+      clinician.id === registered.user.id
+        ? { ...clinician, credentialStatus: "verified" as const, publicDirectoryVisible: true }
+        : clinician,
+    );
+    const clinicianActor = platform.clinicians.find((clinician) => clinician.id === registered.user.id)!;
+    const slot = createClinicianAvailabilitySlot(platform, clinicianActor.id, clinicianActor, {
+      startsAt: "2026-07-02T12:00:00.000Z",
+      endsAt: "2026-07-02T12:30:00.000Z",
+      createdAt: "2026-07-02T02:00:00.000Z",
+    });
+
+    expect(() =>
+      createClinicianAvailabilitySlot(platform, clinicianActor.id, clinicianActor, {
+        startsAt: "2026-07-02T12:15:00.000Z",
+        endsAt: "2026-07-02T12:45:00.000Z",
+        createdAt: "2026-07-02T02:00:00.000Z",
+      }),
+    ).toThrow("Availability slot overlaps existing schedule");
+
+    const session = bookConsultationFromAvailability(platform, {
+      patientUserId: "user_1",
+      caseId: "case_slot_booking",
+      availabilitySlotId: slot.id,
+      createdAt: "2026-07-02T02:05:00.000Z",
+    });
+
+    expect(session.clinicianId).toBe(clinicianActor.id);
+    expect(session.scheduledStartAt).toBe(slot.startsAt);
+    expect(platform.clinicianAvailabilitySlots.find((candidate) => candidate.id === slot.id)).toMatchObject({
+      status: "booked",
+      bookedConsultationSessionId: session.id,
+    });
+    expect(() =>
+      bookConsultationFromAvailability(platform, {
+        patientUserId: "user_1",
+        caseId: "case_slot_booking",
+        availabilitySlotId: slot.id,
+      }),
+    ).toThrow("Availability slot is not bookable");
   });
 
   it("uses resolved token actors for route-facing joins, messages, and snapshots", () => {
@@ -569,7 +747,9 @@ describe("consultation orchestration", () => {
     expect(snapshot.plans.find((candidate) => candidate.id === "plan_ai_existing")?.source).toBe("ai_generated");
     expect(snapshot.plans.find((candidate) => candidate.id === plan.id)?.source).toBe("clinician_custom");
     expect(snapshot.messages.some((message) => message.kind === "plan_offer")).toBe(true);
-    expect(snapshot.actionLibrary).toHaveLength(2);
+    expect(snapshot.actionLibrary.length).toBeGreaterThanOrEqual(1114);
+    expect(snapshot.actionLibrary.some((action) => action.id === "action_quad_iso")).toBe(true);
+    expect(snapshot.actionLibrary.some((action) => action.id.startsWith("exercise_"))).toBe(true);
   });
 
   it("denies plan offers before activation and from pending clinicians", () => {
@@ -605,6 +785,10 @@ describe("consultation orchestration", () => {
       weightKg: "",
       specialties: ["knee"],
     });
+    platform.clinicians = platform.clinicians.map((candidate) =>
+      candidate.id === pending.user.id ? { ...candidate, credentialStatus: "pending" as const } : candidate,
+    );
+    const pendingActor = platform.clinicians.find((candidate) => candidate.id === pending.user.id)!;
     platform.consultations.push({
       id: "consult_pending_fixture",
       patientUserId: "user_1",
@@ -633,7 +817,7 @@ describe("consultation orchestration", () => {
     });
 
     expect(() =>
-      createClinicianPlanForConsultation(platform, "consult_pending_fixture", pending.user, {
+      createClinicianPlanForConsultation(platform, "consult_pending_fixture", pendingActor, {
         title: "待审核康复师计划",
         dayLabel: "第 1 天",
         actionIds: [action.id],
