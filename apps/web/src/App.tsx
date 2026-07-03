@@ -339,9 +339,18 @@ function storeSession(session: AuthSession | null) {
 }
 
 export function App() {
-  const [session, setSession] = useState<AuthSession | null>(() => loadStoredSession());
-  const [cases, setCases] = useState<PatientCase[]>([]);
-  const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
+  const [initialAppState] = useState(() => {
+    const storedSession = loadStoredSession();
+    const storedCases = storedSession?.user.role === "user" ? hydrateCasesFromMemory(storedSession.memory) : [];
+    return {
+      activeCaseId: storedCases[0]?.id ?? null,
+      cases: storedCases,
+      session: storedSession,
+    };
+  });
+  const [session, setSession] = useState<AuthSession | null>(initialAppState.session);
+  const [cases, setCases] = useState<PatientCase[]>(initialAppState.cases);
+  const [activeCaseId, setActiveCaseId] = useState<string | null>(initialAppState.activeCaseId);
   const [activePage, setActivePage] = useState<AppPage>("home");
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -583,9 +592,11 @@ export function App() {
     }
 
     const nextSession = (await response.json()) as AuthSession;
+    const hydratedCases = hydrateCasesFromMemory(nextSession.memory);
     setSession(nextSession);
     storeSession(nextSession);
-    setCases(hydrateCasesFromMemory(nextSession.memory));
+    setCases(hydratedCases);
+    setActiveCaseId(hydratedCases[0]?.id ?? null);
     setActivePage("home");
   }
 
@@ -833,7 +844,15 @@ export function App() {
       const nextSession = { ...session, memory };
       setSession(nextSession);
       storeSession(nextSession);
-      setCases((currentCases) => hydrateCasesFromMemory(memory, currentCases));
+      setCases((currentCases) => {
+        const hydratedCases = hydrateCasesFromMemory(memory, currentCases);
+        setActiveCaseId((currentActiveCaseId) =>
+          currentActiveCaseId && hydratedCases.some((patientCase) => patientCase.id === currentActiveCaseId)
+            ? currentActiveCaseId
+            : hydratedCases[0]?.id ?? null,
+        );
+        return hydratedCases;
+      });
     } catch {
       // Existing local state remains visible if the backend is briefly unavailable.
     }
@@ -1142,7 +1161,11 @@ export function App() {
         </section>
 
         <aside className="right-column">
-          <Panel title="今日计划" action={activeCase?.plan ? "查看完整计划" : undefined}>
+          <Panel
+            title="今日计划"
+            action={activeCase?.plan ? "查看完整计划" : undefined}
+            onAction={activeCase?.plan ? () => navigatePage("plans") : undefined}
+          >
             {activeCase?.plan ? (
               <div className="today-plan">
                 <div className="stage-box">
@@ -1227,7 +1250,7 @@ export function App() {
           cases={cases}
           onOpenHome={() => navigatePage("home")}
           onOpenRecords={() => navigatePage("records")}
-          plans={session.memory.trainingPlans}
+          plans={displayTrainingPlans(session.memory.trainingPlans, cases)}
         />
       ) : (
         <RecordsPage
@@ -1511,6 +1534,28 @@ function planForCase(memory: UserMemory, caseId: string): CasePlan | null {
     items: memoryPlan.items,
     stage: memoryPlan.stage,
   };
+}
+
+function displayTrainingPlans(memoryPlans: MemoryTrainingPlan[], cases: PatientCase[]): MemoryTrainingPlan[] {
+  const planByCaseId = new Map(memoryPlans.map((plan) => [plan.caseId, plan]));
+  for (const patientCase of cases) {
+    if (!patientCase.plan || planByCaseId.has(patientCase.id)) {
+      continue;
+    }
+    planByCaseId.set(patientCase.id, {
+      id: `local_plan_${patientCase.id}`,
+      caseId: patientCase.id,
+      categoryId: patientCase.categoryId,
+      title: patientCase.plan.title,
+      status: "active",
+      dayLabel: patientCase.plan.dayLabel,
+      completionPercent: patientCase.plan.completionPercent,
+      items: patientCase.plan.items,
+      stage: patientCase.plan.stage,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+  return Array.from(planByCaseId.values()).sort((first, second) => second.updatedAt.localeCompare(first.updatedAt));
 }
 
 function makeComplaintTitle(content: string) {
