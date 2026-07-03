@@ -379,6 +379,7 @@ export function App() {
 
   useEffect(() => {
     if (session?.user.role === "user") {
+      void refreshMemoryForCurrentUser();
       void loadClinicians();
       void loadPatientConsultations();
     }
