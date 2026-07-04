@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import mentisMark from "./assets/mentis-mark-transparent.png";
 import rezLogo from "./assets/rez-logo.png";
+import { loadStoredSession, storeSession, validateStoredSession } from "./authSession";
 import { evidence } from "./data";
 
 type ChatMessage = {
@@ -319,38 +320,20 @@ const clientBuildId = "2026-07-01-1353";
 
 const configuredApiBase = import.meta.env.VITE_API_BASE?.trim();
 const API_BASE = configuredApiBase || (import.meta.env.DEV ? "http://127.0.0.1:3001" : "https://api.aimentis.site");
-const SESSION_STORAGE_KEY = "mentis_user_session";
-
-function loadStoredSession(): AuthSession | null {
-  try {
-    const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as AuthSession) : null;
-  } catch {
-    return null;
-  }
-}
-
-function storeSession(session: AuthSession | null) {
-  if (session) {
-    window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-  } else {
-    window.localStorage.removeItem(SESSION_STORAGE_KEY);
-  }
-}
 
 export function App() {
   const [initialAppState] = useState(() => {
-    const storedSession = loadStoredSession();
-    const storedCases = storedSession?.user.role === "user" ? hydrateCasesFromMemory(storedSession.memory) : [];
+    const storedSession = loadStoredSession<AuthSession>();
     return {
-      activeCaseId: storedCases[0]?.id ?? null,
-      cases: storedCases,
-      session: storedSession,
+      storedSession,
     };
   });
-  const [session, setSession] = useState<AuthSession | null>(initialAppState.session);
-  const [cases, setCases] = useState<PatientCase[]>(initialAppState.cases);
-  const [activeCaseId, setActiveCaseId] = useState<string | null>(initialAppState.activeCaseId);
+  const [session, setSession] = useState<AuthSession | null>(null);
+  const [cases, setCases] = useState<PatientCase[]>([]);
+  const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
+  const [authStatus, setAuthStatus] = useState<"checking" | "ready">(
+    initialAppState.storedSession ? "checking" : "ready",
+  );
   const [activePage, setActivePage] = useState<AppPage>("home");
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -378,6 +361,36 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const storedSession = initialAppState.storedSession;
+    if (!storedSession) {
+      return;
+    }
+
+    let cancelled = false;
+    validateStoredSession(storedSession, { apiBase: API_BASE }).then((validSession) => {
+      if (cancelled) {
+        return;
+      }
+
+      if (!validSession) {
+        storeSession(null);
+        setAuthStatus("ready");
+        return;
+      }
+
+      const hydratedCases = validSession.user.role === "user" ? hydrateCasesFromMemory(validSession.memory) : [];
+      setSession(validSession);
+      setCases(hydratedCases);
+      setActiveCaseId(hydratedCases[0]?.id ?? null);
+      setAuthStatus("ready");
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialAppState.storedSession]);
+
+  useEffect(() => {
     if (session?.user.role === "user") {
       void refreshMemoryForCurrentUser();
       void loadClinicians();
@@ -397,6 +410,24 @@ export function App() {
 
   if (session?.user.role === "admin") {
     return <AdminDashboard session={session} onLogout={logout} />;
+  }
+
+  if (authStatus === "checking") {
+    return (
+      <main className="login-page" data-build-id={clientBuildId}>
+        <section className="login-shell">
+          <div className="login-brand">
+            <div className="brand-mark">
+              <img src={rezLogo} alt="Mentis Rehab" />
+            </div>
+            <div>
+              <strong>Mentis Rehab</strong>
+              <span>正在确认登录状态</span>
+            </div>
+          </div>
+        </section>
+      </main>
+    );
   }
 
   function chooseCategory(category: RehabConsultCategory) {

@@ -876,57 +876,82 @@ describe("Qwen chat client", () => {
 
     expect(prompt).toContain("不要使用 Markdown");
     expect(prompt).toContain("一次只问一个主要问题");
-    expect(prompt).toContain("优先给出可点击选项");
+    expect(prompt).toContain("由你根据当前上下文生成");
+    expect(prompt).toContain("只返回一个 JSON 对象");
     expect(prompt).toContain("Mentis 特调的 AI 康复模型");
     expect(prompt).toContain("不要提及千问");
   });
 
-  it("builds guided ankle assessment options before giving training advice", () => {
+  it("parses model-generated JSON options without inventing template fields", () => {
     const guided = buildGuidedChatResponse(
       [{ role: "user", content: "昨天崴脚了，今天有点肿" }],
       { category: "ankle" },
-      "**第一步**：请先排查红旗症状。",
+      JSON.stringify({
+        content: "**第一步**：先确认有没有需要线下评估的信号。",
+        question: "现在能连续走 4 步吗？",
+        options: [
+          { label: "能连续走 4 步", value: "我现在能连续走 4 步" },
+          { label: "不能", value: "我现在不能连续走 4 步" },
+          { label: "不确定", value: "我不确定能不能连续走 4 步" },
+        ],
+      }),
     );
 
-    expect(guided.assessmentStep).toBe("ankle_weight_bearing");
+    expect(guided.assessmentStep).toBeUndefined();
     expect(guided.question).toBe("现在能连续走 4 步吗？");
-    expect(guided.options?.map((option) => option.label)).toEqual(["能", "不能", "不确定"]);
+    expect(guided.options?.map((option) => option.label)).toEqual(["能连续走 4 步", "不能", "不确定"]);
     expect(guided.content).not.toMatch(/\*\*|#{1,6}\s|\|/);
     expect(guided.planPatch).toBeUndefined();
   });
 
-  it("builds guided knee assessment options as a single next question", () => {
+  it("does not invent knee assessment options when the model returns plain text", () => {
     const guided = buildGuidedChatResponse(
       [{ role: "user", content: "跑步后膝盖肿了，上下楼疼" }],
       { category: "knee" },
+      "我先了解你的膝盖情况。请描述肿胀出现的时间和是否能正常走路。",
     );
 
-    expect(guided.assessmentStep).toBe("knee_weight_bearing");
-    expect(guided.question).toBe("现在能正常承重走路吗？");
-    expect(guided.options?.map((option) => option.label)).toEqual(["能", "不能", "不确定"]);
+    expect(guided.assessmentStep).toBeUndefined();
+    expect(guided.question).toBeUndefined();
+    expect(guided.options).toBeUndefined();
     expect(guided.content.split("\n").filter(Boolean).length).toBeLessThanOrEqual(2);
+  });
+
+  it("does not start knee pain-location buttons for a generic greeting", () => {
+    const guided = buildGuidedChatResponse(
+      [{ role: "user", content: "晚上好" }],
+      { category: "knee" },
+      "晚上好，我是 Mentis Rehab 的运动康复 AI 助手。请直接告诉我你今天想咨询的不适。",
+    );
+
+    expect(guided.assessmentStep).toBeUndefined();
+    expect(guided.question).toBeUndefined();
+    expect(guided.options).toBeUndefined();
+    expect(guided.content).toContain("晚上好");
   });
 
   it("asks knee pain location first when the complaint is non-traumatic extension pain", () => {
     const guided = buildGuidedChatResponse(
       [{ role: "user", content: "膝盖伸直的时候疼" }],
       { category: "knee" },
-      "我先确认伸直时疼痛的具体位置。",
+      JSON.stringify({
+        content: "我先确认伸直时疼痛的具体位置。",
+        question: "伸直膝盖时，最明显疼痛位置在哪里？",
+        options: ["膝盖前方", "膝盖后方", "内侧", "外侧"],
+      }),
     );
 
-    expect(guided.assessmentStep).toBe("knee_pain_location");
+    expect(guided.assessmentStep).toBeUndefined();
     expect(guided.question).toBe("伸直膝盖时，最明显疼痛位置在哪里？");
     expect(guided.options?.map((option) => option.label)).toEqual([
       "膝盖前方",
       "膝盖后方",
       "内侧",
       "外侧",
-      "关节里面",
-      "说不清",
     ]);
   });
 
-  it("advances knee flow from weight-bearing answer to pain location options", () => {
+  it("uses the model's next question after a selected answer", () => {
     const guided = buildGuidedChatResponse(
       [
         { role: "user", content: "膝盖摔了一下，现在伸直疼" },
@@ -939,16 +964,23 @@ describe("Qwen chat client", () => {
         { role: "user", content: "能" },
       ],
       { category: "knee" },
-      "好的，能伸直说明关节活动度还可以。那请问你伸直膝盖时，具体是哪里疼呢？",
+      JSON.stringify({
+        content: "能承重是一个相对安心的信号，但摔伤后仍要看疼痛位置和肿胀变化。",
+        question: "你现在最明显的疼痛位置在哪里？",
+        options: [
+          { label: "前方", value: "膝盖前方最疼" },
+          { label: "内侧", value: "膝盖内侧最疼" },
+        ],
+      }),
     );
 
-    expect(guided.assessmentStep).toBe("knee_pain_location");
-    expect(guided.question).toBe("伸直膝盖时，最明显疼痛位置在哪里？");
-    expect(guided.options?.map((option) => option.label)).toContain("膝盖前方");
+    expect(guided.assessmentStep).toBeUndefined();
+    expect(guided.question).toBe("你现在最明显的疼痛位置在哪里？");
+    expect(guided.options?.map((option) => option.label)).toEqual(["前方", "内侧"]);
     expect(guided.options?.map((option) => option.label)).not.toEqual(["能", "不能", "不确定"]);
   });
 
-  it("offers a structured knee plan only after enough guided answers, then patches plan on acceptance", () => {
+  it("does not create local plan patches from scripted knee flow", () => {
     const offer = buildGuidedChatResponse(
       [
         { role: "user", content: "膝盖伸直的时候疼" },
@@ -962,24 +994,17 @@ describe("Qwen chat client", () => {
         { role: "user", content: "最近跑量增加了" },
       ],
       { category: "knee" },
+      JSON.stringify({
+        content: "这些信息提示需要先做保守负荷管理，我会先给出低风险调整建议。",
+        question: "你希望现在生成一个保守训练建议吗？",
+        options: ["生成建议", "先继续问诊"],
+      }),
     );
 
-    expect(offer.assessmentStep).toBe("knee_plan_offer");
-    expect(offer.question).toBe("要把这份膝盖保守运动处方加入今日计划吗？");
-    expect(offer.options?.map((option) => option.label)).toEqual(["接受", "先不接受"]);
+    expect(offer.assessmentStep).toBeUndefined();
+    expect(offer.question).toBe("你希望现在生成一个保守训练建议吗？");
+    expect(offer.options?.map((option) => option.label)).toEqual(["生成建议", "先继续问诊"]);
     expect(offer.planPatch).toBeUndefined();
-
-    const accepted = buildGuidedChatResponse(
-      [
-        { role: "assistant", content: "要加入今日计划吗？", assessmentStep: "knee_plan_offer" },
-        { role: "user", content: "接受" },
-      ],
-      { category: "knee" },
-    );
-
-    expect(accepted.assessmentStep).toBe("knee_plan_accepted");
-    expect(accepted.planPatch?.title).toContain("膝盖");
-    expect(accepted.planPatch?.items?.length).toBeGreaterThan(0);
   });
 
   it("does not create plan patches when red flag answers require offline assessment", () => {
@@ -990,9 +1015,10 @@ describe("Qwen chat client", () => {
         { role: "user", content: "不能" },
       ],
       { category: "ankle" },
+      "这个情况需要先排除骨折或较重韧带损伤。请暂停训练，尽快做线下评估。",
     );
 
-    expect(guided.assessmentStep).toBe("ankle_urgent_referral");
+    expect(guided.assessmentStep).toBeUndefined();
     expect(guided.content).toContain("线下评估");
     expect(guided.planPatch).toBeUndefined();
   });
@@ -1095,14 +1121,29 @@ describe("Qwen chat client", () => {
     expect(body.messages[0].content).toContain("Monitor pain during and 24 hours after activity.");
   });
 
-  it("wraps model content with guided assessment fields for the chat UI", async () => {
+  it("passes model-generated structured options through to the chat UI", async () => {
     let fetchCalls = 0;
     const fetcher = async () => {
       fetchCalls += 1;
-      return new Response(JSON.stringify({ choices: [{ message: { content: "**第一步**：先确认能不能走。" } }] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  content: "**第一步**：先确认脚踝能不能承重。",
+                  question: "现在能连续走 4 步吗？",
+                  options: ["能连续走 4 步", "不能", "不确定"],
+                }),
+              },
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     };
 
     const result = await chatWithQwen(
@@ -1118,14 +1159,29 @@ describe("Qwen chat client", () => {
     expect(result.planPatch).toBeUndefined();
   });
 
-  it("returns local guided options for acute ankle screening without waiting for the model", async () => {
+  it("calls the model for acute ankle screening instead of using local options", async () => {
     let fetchCalls = 0;
     const fetcher = async () => {
       fetchCalls += 1;
-      return new Response(JSON.stringify({ choices: [{ message: { content: "模型不应被调用" } }] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  content: "崴脚后肿胀需要先排除不能承重等信号。",
+                  question: "现在能连续走 4 步吗？",
+                  options: ["能", "不能", "不确定"],
+                }),
+              },
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     };
 
     const result = await chatWithQwen(
@@ -1134,40 +1190,123 @@ describe("Qwen chat client", () => {
       { apiKey: "secret-key", fetcher },
     );
 
-    expect(fetchCalls).toBe(0);
-    expect(result.assessmentStep).toBe("ankle_weight_bearing");
+    expect(fetchCalls).toBe(1);
+    expect(result.assessmentStep).toBeUndefined();
     expect(result.question).toBe("现在能连续走 4 步吗？");
     expect(result.options?.map((option) => option.label)).toEqual(["能", "不能", "不确定"]);
   });
 
-  it("returns local guided knee assessment options without waiting for the model", async () => {
+  it("calls the model for normal knee assessment and uses model-generated options", async () => {
     let fetchCalls = 0;
     const fetcher = async () => {
       fetchCalls += 1;
-      return new Response(JSON.stringify({ choices: [{ message: { content: "模型不应被调用" } }] }), {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  content: "伸直时疼痛需要先看位置和是否伴随肿胀。",
+                  question: "伸直膝盖时，最明显疼痛位置在哪里？",
+                  options: ["膝盖前方", "膝盖后方", "内侧", "外侧"],
+                }),
+              },
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    };
+
+    const result = await chatWithQwen(
+      [{ role: "user", content: "膝盖伸直的时候疼" }],
+      { category: "knee" },
+      { apiKey: "secret-key", fetcher },
+    );
+
+    expect(fetchCalls).toBe(1);
+    expect(result.content).toContain("位置");
+    expect(result.assessmentStep).toBeUndefined();
+    expect(result.question).toBe("伸直膝盖时，最明显疼痛位置在哪里？");
+    expect(result.options?.map((option) => option.label)).toContain("膝盖前方");
+  });
+
+  it("does not advance a knee guided flow when the user asks an unrelated question", async () => {
+    let fetchCalls = 0;
+    const fetcher = async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "我无法提供实时天气。我们可以继续膝盖问诊，或你先查看天气应用。" } }] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     };
 
     const result = await chatWithQwen(
-      [{ role: "user", content: "膝盖伸直的时候疼" }],
+      [
+        { role: "user", content: "膝盖前方疼" },
+        { role: "assistant", content: "位置先记下。现在用疼痛分数判断刺激强度。", assessmentStep: "knee_pain_score" },
+        { role: "user", content: "明天天气如何" },
+      ],
       { category: "knee" },
-      { apiKey: "", fetcher },
+      { apiKey: "secret-key", fetcher },
     );
 
-    expect(fetchCalls).toBe(0);
-    expect(result.content).toContain("疼痛位置");
-    expect(result.assessmentStep).toBe("knee_pain_location");
-    expect(result.question).toBe("伸直膝盖时，最明显疼痛位置在哪里？");
-    expect(result.options?.map((option) => option.label)).toContain("膝盖前方");
+    expect(fetchCalls).toBe(1);
+    expect(result.content).toContain("天气");
+    expect(result.assessmentStep).toBeUndefined();
+    expect(result.question).toBeUndefined();
+    expect(result.options).toBeUndefined();
   });
 
-  it("returns local urgent guidance for red flag option answers without waiting for the model", async () => {
+  it("calls the model for knee option replies before adding the next structured question", async () => {
     let fetchCalls = 0;
     const fetcher = async () => {
       fetchCalls += 1;
-      return new Response(JSON.stringify({ choices: [{ message: { content: "模型不应被调用" } }] }), {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  content: "收到，4-6 分属于中等刺激。下一步看诱发动作。",
+                  question: "哪个动作最容易诱发这次膝盖疼？",
+                  options: ["伸直膝盖", "上下楼", "深蹲", "跑步", "运动后"],
+                }),
+              },
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    };
+
+    const result = await chatWithQwen(
+      [
+        { role: "user", content: "膝盖前方疼" },
+        { role: "assistant", content: "按 0-10 分算，现在或诱发时大概几分？", assessmentStep: "knee_pain_score" },
+        { role: "user", content: "4-6 分" },
+      ],
+      { category: "knee" },
+      { apiKey: "secret-key", fetcher },
+    );
+
+    expect(fetchCalls).toBe(1);
+    expect(result.content).toContain("4-6 分");
+    expect(result.assessmentStep).toBeUndefined();
+    expect(result.question).toBe("哪个动作最容易诱发这次膝盖疼？");
+  });
+
+  it("calls the model for red flag option answers so safety guidance uses full context", async () => {
+    let fetchCalls = 0;
+    const fetcher = async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "不能连续走 4 步需要先排除骨折或较重韧带损伤，请暂停训练并尽快线下评估。" } }] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -1183,8 +1322,8 @@ describe("Qwen chat client", () => {
       { apiKey: "secret-key", fetcher },
     );
 
-    expect(fetchCalls).toBe(0);
-    expect(result.assessmentStep).toBe("ankle_urgent_referral");
+    expect(fetchCalls).toBe(1);
+    expect(result.assessmentStep).toBeUndefined();
     expect(result.content).toContain("线下评估");
     expect(result.planPatch).toBeUndefined();
   });

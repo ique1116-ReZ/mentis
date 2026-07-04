@@ -1507,13 +1507,21 @@ export function buildChatSystemPrompt(context: ChatContext = {}): string {
       "说话规则：使用中文，简短、温和、实用。",
       "不要使用 Markdown、加粗符号、标题、表格或长编号列表。",
       "一次只问一个主要问题。",
-      "需要继续评估时，优先给出可点击选项。",
+      "像认真问诊的康复医生一样先理解用户原话；不要机械推进流程，不要忽略用户临时插入的问题。",
+      "需要继续评估时，由你根据当前上下文生成 2-6 个可点击选项；选项必须贴合用户这一轮内容，不能使用固定模板。",
+      "如果用户点选了选项，也要把它当作新的用户回答重新思考，再决定下一步。",
       "如果用户询问你使用的模型、底层大模型、供应商或技术来源，只回答：我使用的是 Mentis 特调的 AI 康复模型。",
       "不要提及千问、Qwen、DashScope、DeepSeek、OpenAI 或任何底层模型/供应商名称。",
     ].join("\n"),
+    [
+      "输出格式：只返回一个 JSON 对象，不要包裹代码块。",
+      'JSON 字段：{"content":"给用户看的回答","question":"下一步只问一个问题，可省略","options":[{"label":"按钮文案","value":"点击后发送给模型的完整回答"}]}',
+      "如果不需要按钮，省略 question 和 options。",
+      "content 必须能单独成立；question 和 options 只是结构化交互辅助。",
+    ].join("\n"),
     categoryScope,
     ragContext
-      ? `可用 RAG 证据：\n${ragContext}\n回答应优先使用这些证据，并在需要时提及来源。`
+      ? `可用 RAG 证据：\n${ragContext}\n回答必须优先使用这些证据；如果证据不足，明确说明需要补充信息，不要编造来源。`
       : "当前第一版还没有接入实时 RAG 检索。不要编造 RAG 引用、论文名、页码或不存在的证据来源。",
   ].join("\n\n");
 }
@@ -1525,36 +1533,13 @@ export function buildGuidedChatResponse(
 ): GuidedChatResult {
   const latestUserMessage = [...messages].reverse().find((message) => message.role === "user");
   const latestUserContent = latestUserMessage?.content.trim() ?? "";
-  const category = context.category;
-  const content = sanitizeAssistantContent(
-    modelContent || initialGuidedContent(category, latestUserContent),
-  );
-
-  if (category === "ankle") {
-    if (isNegativeChoice(latestUserContent)) {
-      return {
-        content: "这个情况需要先排除骨折或较重韧带损伤。请暂停训练，尽快做线下评估。",
-        model: "guided-template",
-        assessmentStep: "ankle_urgent_referral",
-      };
-    }
-
-    return {
-      content,
-      model: "guided-template",
-      assessmentStep: "ankle_weight_bearing",
-      question: "现在能连续走 4 步吗？",
-      options: yesNoUnsureOptions("ankle_weight_bearing"),
-    };
-  }
-
-  if (category === "knee") {
-    return buildKneeGuidedChatResponse(messages, latestUserContent, content);
-  }
+  const parsed = parseModelGuidedChatOutput(modelContent);
 
   return {
-    content,
-    model: "guided-template",
+    content: parsed.content || sanitizeAssistantContent(initialOpenQuestion(context.category, latestUserContent)),
+    model: "llm",
+    question: parsed.question,
+    options: parsed.options,
   };
 }
 
@@ -1570,228 +1555,82 @@ export function sanitizeAssistantContent(content: string): string {
     .join("\n");
 }
 
-function initialGuidedContent(category: RehabConsultCategory | undefined, latestUserContent: string): string {
-  if (category === "ankle") {
-    return latestUserContent.includes("肿")
-      ? "了解，崴脚后肿胀很常见。我们先确认有没有需要线下评估的信号。"
-      : "先从安全筛查开始，确认脚踝能不能承重。";
+function initialOpenQuestion(category: RehabConsultCategory | undefined, latestUserContent: string): string {
+  if (latestUserContent) {
+    return "我看到了你的问题。请再补充一下最主要的不适、持续时间和诱发动作。";
   }
-  if (category === "knee") {
-    if (shouldAskKneeWeightBearingFirst(latestUserContent)) {
-      return "先确认一个安全问题，再决定是否适合继续做训练调整。";
-    }
-    return "伸直时疼痛位置很关键。先把位置分清，再判断疼痛强度和诱发动作。";
+  if (category) {
+    return "请直接告诉我你今天最想咨询的不适、持续多久了，以及什么动作会诱发。";
   }
-  return "我先帮你做一个简短安全筛查。";
+  return "请先选择咨询部位，或直接描述你的不适。";
 }
 
-function yesNoUnsureOptions(step: string): ChatOption[] {
-  return [
-    { id: `${step}_yes`, label: "能", value: "能" },
-    { id: `${step}_no`, label: "不能", value: "不能" },
-    { id: `${step}_unsure`, label: "不确定", value: "不确定" },
-  ];
-}
-
-function buildKneeGuidedChatResponse(
-  messages: ChatMessage[],
-  latestUserContent: string,
-  content: string,
-): GuidedChatResult {
-  const previousStep = latestAssistantAssessmentStep(messages);
-
-  if (previousStep === "knee_plan_offer") {
-    if (isAcceptChoice(latestUserContent)) {
-      return {
-        content: "已加入今日计划。先按低刺激方案执行，训练中疼痛控制在可接受范围，第二天不明显加重再推进。",
-        model: "guided-template",
-        assessmentStep: "knee_plan_accepted",
-        planPatch: buildConservativeKneePlanPatch(),
-      };
-    }
-    return {
-      content: "好的，先不加入计划。你可以继续补充疼痛变化，或等症状更稳定后再生成训练安排。",
-      model: "guided-template",
-      assessmentStep: "knee_plan_declined",
-    };
-  }
-
-  if (previousStep === "knee_training_load") {
-    return {
-      content:
-        "信息够做一个保守版起步方案了：先降低跑跳和下楼刺激，保留不加重疼痛的活动度与轻力量训练。",
-      model: "guided-template",
-      assessmentStep: "knee_plan_offer",
-      question: "要把这份膝盖保守运动处方加入今日计划吗？",
-      options: [
-        { id: "knee_plan_accept", label: "接受", value: "接受" },
-        { id: "knee_plan_decline", label: "先不接受", value: "先不接受" },
-      ],
-    };
-  }
-
-  if (previousStep === "knee_trigger") {
-    return {
-      content: "明白了。再确认训练背景，方便把建议限定在合适负荷。",
-      model: "guided-template",
-      assessmentStep: "knee_training_load",
-      question: "最近 7 天跑步、跳跃或下肢训练量有没有明显增加？",
-      options: [
-        { id: "knee_load_increased", label: "明显增加", value: "最近训练量明显增加" },
-        { id: "knee_load_same", label: "差不多", value: "最近训练量差不多" },
-        { id: "knee_load_decreased", label: "已经减少", value: "最近已经减少训练" },
-        { id: "knee_load_none", label: "基本没训练", value: "最近基本没训练" },
-      ],
-    };
-  }
-
-  if (previousStep === "knee_pain_score") {
-    return {
-      content: "收到。接下来确认诱发动作，这比单看疼痛分数更能帮助调整训练。",
-      model: "guided-template",
-      assessmentStep: "knee_trigger",
-      question: "哪个动作最容易诱发这次膝盖疼？",
-      options: [
-        { id: "knee_trigger_extension", label: "伸直膝盖", value: "伸直膝盖时疼" },
-        { id: "knee_trigger_stairs", label: "上下楼", value: "上下楼时疼" },
-        { id: "knee_trigger_squat", label: "深蹲", value: "深蹲时疼" },
-        { id: "knee_trigger_run", label: "跑步", value: "跑步时疼" },
-        { id: "knee_trigger_after", label: "运动后", value: "运动后疼" },
-      ],
-    };
-  }
-
-  if (previousStep === "knee_pain_location") {
-    return {
-      content: "位置先记下。现在用疼痛分数判断刺激强度。",
-      model: "guided-template",
-      assessmentStep: "knee_pain_score",
-      question: "按 0-10 分算，现在或诱发时大概几分？",
-      options: [
-        { id: "knee_score_mild", label: "0-3 分", value: "0-3 分" },
-        { id: "knee_score_moderate", label: "4-6 分", value: "4-6 分" },
-        { id: "knee_score_high", label: "7-10 分", value: "7-10 分" },
-        { id: "knee_score_unsure", label: "说不准", value: "疼痛分数说不准" },
-      ],
-    };
-  }
-
-  if (previousStep === "knee_weight_bearing") {
-    if (isNegativeChoice(latestUserContent)) {
-      return {
-        content: "如果现在不能承重走路，需要先排除较重损伤。请暂停训练，优先线下评估。",
-        model: "guided-template",
-        assessmentStep: "knee_urgent_referral",
-      };
-    }
-    return kneePainLocationStep(content, hasExtensionPain(messages));
-  }
-
-  if (mentionsCannotBearWeight(latestUserContent)) {
-    return {
-      content: "不能正常承重走路属于需要谨慎处理的信号。请先暂停训练，优先线下评估。",
-      model: "guided-template",
-      assessmentStep: "knee_urgent_referral",
-    };
-  }
-
-  if (shouldAskKneeWeightBearingFirst(latestUserContent)) {
+function parseModelGuidedChatOutput(rawContent: string): Pick<GuidedChatResult, "content" | "question" | "options"> {
+  const raw = rawContent.trim();
+  const jsonText = stripJsonCodeFence(raw);
+  try {
+    const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+    const content = sanitizeAssistantContent(readFirstString(parsed, ["content", "answer", "message"]));
+    const question = sanitizeAssistantContent(readFirstString(parsed, ["question"]));
+    const options = normalizeModelOptions(parsed.options);
     return {
       content,
-      model: "guided-template",
-      assessmentStep: "knee_weight_bearing",
-      question: "现在能正常承重走路吗？",
-      options: yesNoUnsureOptions("knee_weight_bearing"),
+      question: question || undefined,
+      options: options.length > 0 ? options : undefined,
     };
+  } catch {
+    return { content: sanitizeAssistantContent(raw) };
   }
-
-  return kneePainLocationStep(content, hasExtensionPain(messages));
 }
 
-function kneePainLocationStep(content: string, extensionPain: boolean): GuidedChatResult {
-  return {
-    content,
-    model: "guided-template",
-    assessmentStep: "knee_pain_location",
-    question: extensionPain ? "伸直膝盖时，最明显疼痛位置在哪里？" : "现在膝盖最明显疼痛位置在哪里？",
-    options: [
-      { id: "knee_location_front", label: "膝盖前方", value: "膝盖前方疼" },
-      { id: "knee_location_back", label: "膝盖后方", value: "膝盖后方疼" },
-      { id: "knee_location_inside", label: "内侧", value: "膝盖内侧疼" },
-      { id: "knee_location_outside", label: "外侧", value: "膝盖外侧疼" },
-      { id: "knee_location_deep", label: "关节里面", value: "感觉在关节里面疼" },
-      { id: "knee_location_unsure", label: "说不清", value: "疼痛位置说不清" },
-    ],
-  };
+function stripJsonCodeFence(content: string): string {
+  const fenced = content.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const unfenced = fenced ? fenced[1].trim() : content;
+  const start = unfenced.indexOf("{");
+  const end = unfenced.lastIndexOf("}");
+  return start >= 0 && end > start ? unfenced.slice(start, end + 1).trim() : unfenced;
 }
 
-function buildConservativeKneePlanPatch(): ChatPlanPatch {
-  return {
-    title: "膝盖保守恢复计划",
-    dayLabel: "第 1 天",
-    completionPercent: 0,
-    items: [
-      { title: "暂停跑跳与深蹲刺激", meta: "24-48 小时观察疼痛和肿胀反应", state: "todo" },
-      { title: "温和膝关节活动", meta: "坐姿伸屈或脚跟滑动 2 组，每组 10-12 次", state: "todo" },
-      { title: "低负荷股四头肌激活", meta: "无痛范围等长收缩 5 秒 x 8-10 次", state: "todo" },
-    ],
-    stage: {
-      name: "镇痛与负荷管理",
-      progressLabel: "起步观察期",
-      progressPercent: 12,
-      goals: ["疼痛不超过 3/10", "第二天不明显加重", "恢复可控伸直与日常步行"],
-    },
-  };
+function readFirstString(source: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return "";
 }
 
-function latestAssistantAssessmentStep(messages: ChatMessage[]): string | undefined {
-  const latestAssistant = [...messages].reverse().find((message) => message.role === "assistant");
-  if (!latestAssistant) {
-    return undefined;
+function normalizeModelOptions(value: unknown): ChatOption[] {
+  if (!Array.isArray(value)) {
+    return [];
   }
-  if (latestAssistant.assessmentStep) {
-    return latestAssistant.assessmentStep;
-  }
-  const text = `${latestAssistant.content}\n${latestAssistant.question ?? ""}`;
-  if (/承重|走路/.test(text)) {
-    return "knee_weight_bearing";
-  }
-  if (/位置|哪里疼/.test(text)) {
-    return "knee_pain_location";
-  }
-  if (/几分|0-10|疼痛分数/.test(text)) {
-    return "knee_pain_score";
-  }
-  if (/诱发|动作/.test(text)) {
-    return "knee_trigger";
-  }
-  if (/训练量|最近 7 天/.test(text)) {
-    return "knee_training_load";
-  }
-  if (/加入今日计划|运动处方/.test(text)) {
-    return "knee_plan_offer";
-  }
-  return undefined;
+  return value
+    .map((entry, index) => {
+      if (typeof entry === "string") {
+        const label = sanitizeOptionText(entry);
+        return label ? { id: `llm_option_${index + 1}`, label, value: label } : null;
+      }
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const option = entry as Record<string, unknown>;
+      const label = sanitizeOptionText(
+        typeof option.label === "string" ? option.label : typeof option.text === "string" ? option.text : "",
+      );
+      if (!label) {
+        return null;
+      }
+      const rawValue = typeof option.value === "string" && option.value.trim() ? option.value : label;
+      const id = typeof option.id === "string" && option.id.trim() ? option.id.trim() : `llm_option_${index + 1}`;
+      return { id, label, value: sanitizeOptionText(rawValue) || label };
+    })
+    .filter((option): option is ChatOption => Boolean(option))
+    .slice(0, 6);
 }
 
-function shouldAskKneeWeightBearingFirst(content: string): boolean {
-  return /摔|撞|扭|崴|外伤|受伤|肿|肿胀|积液|突然/.test(content);
-}
-
-function hasExtensionPain(messages: ChatMessage[]): boolean {
-  return messages.some((message) => message.role === "user" && /伸直|打直|伸膝/.test(message.content));
-}
-
-function mentionsCannotBearWeight(content: string): boolean {
-  return /(不能|无法|没法|走不了).{0,6}(承重|走路|走|站)|(?:承重|走路|站).{0,6}(不能|无法|没法)/.test(content);
-}
-
-function isAcceptChoice(content: string): boolean {
-  return /接受|加入|可以|确认|同意/.test(content);
-}
-
-function isNegativeChoice(content: string): boolean {
-  return /不能|不行|走不了|无法/.test(content);
+function sanitizeOptionText(content: string): string {
+  return content.replace(/\s+/g, " ").trim().slice(0, 80);
 }
 
 function isAcceptedPrescriptionStatus(status: string): boolean {
@@ -1807,32 +1646,7 @@ function buildLocalSafetyResponse(messages: ChatMessage[], context: ChatContext)
       model: "mentis-rehab",
     };
   }
-  if (context.category === "ankle" && isAcuteAnkleScreening(latestUserContent)) {
-    return buildGuidedChatResponse(messages, context);
-  }
-  if (context.category === "knee" && isKneeGuidedAssessment(messages, latestUserContent)) {
-    return buildGuidedChatResponse(messages, context);
-  }
-  if (!isNegativeChoice(latestUserContent)) {
-    return null;
-  }
-  if (context.category !== "ankle" && context.category !== "knee") {
-    return null;
-  }
-  return buildGuidedChatResponse(messages, context);
-}
-
-function isAcuteAnkleScreening(content: string): boolean {
-  return /崴脚|扭伤|扭了|肿/.test(content);
-}
-
-function isKneeGuidedAssessment(messages: ChatMessage[], latestUserContent: string): boolean {
-  return Boolean(
-    latestAssistantAssessmentStep(messages) ||
-      /膝|伸直|打直|伸膝|上下楼|下楼|深蹲|跑步|跑后|髌|半月板|前方疼|后方疼|内侧疼|外侧疼/.test(
-        latestUserContent,
-      ),
-  );
+  return null;
 }
 
 function isModelIdentityQuestion(content: string): boolean {

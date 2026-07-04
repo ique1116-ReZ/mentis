@@ -10,8 +10,8 @@
   ],
   "scripts": {
     "build": "npm run build -w @mentis/domain && npm run build -w @mentis/api && npm run build -w @mentis/web",
-    "test": "npm run test -w @mentis/domain && npm run test -w @mentis/api && npm run test:py",
-    "test:js": "npm run test -w @mentis/domain && npm run test -w @mentis/api",
+    "test": "npm run test:js && npm run test:py",
+    "test:js": "npm run test -w @mentis/domain && npm run test -w @mentis/api && npm run test -w @mentis/web",
     "test:py": "PYTHONPATH=apps/ai-service python3 -m unittest discover -s apps/ai-service/tests -p 'test_*.py'",
     "dev:web": "npm run dev -w @mentis/web",
     "dev:api": "npm run dev -w @mentis/api"
