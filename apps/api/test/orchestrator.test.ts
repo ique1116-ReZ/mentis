@@ -6,6 +6,7 @@ import {
   acceptConsultationPlan,
   authenticateDemoUser,
   buildChatSystemPrompt,
+  buildUserMemoryContext,
   buildChatRagContext,
   buildGuidedChatResponse,
   bookConsultationFromAvailability,
@@ -26,6 +27,7 @@ import {
   rememberCase,
   rememberTrainingPlan,
   registerDemoUser,
+  resolveRecommendedActions,
   resolveAuthenticatedActor,
   reviewClinicianCredential,
   runAssessmentWorkflow,
@@ -1234,6 +1236,72 @@ describe("Qwen chat client", () => {
     expect(result.options?.map((option) => option.label)).toContain("膝盖前方");
   });
 
+  it("parses structured rehab action recommendations from model output", () => {
+    const result = buildGuidedChatResponse(
+      [{ role: "user", content: "我想先试两个简单动作" }],
+      { category: "knee" },
+      JSON.stringify({
+        content: "可以先做低刺激激活动作。",
+        recommendedActions: [
+          {
+            title: "坐姿伸膝",
+            bodyRegion: "knee",
+            phase: "镇痛与激活",
+            defaultDosage: "2 组 x 10 次",
+            instructions: ["坐稳后慢慢伸直膝盖", "停 2 秒再放下"],
+            contraindications: ["伸膝时疼痛超过 3/10"],
+            progressionCriteria: ["次日无明显加重"],
+            tags: ["膝盖", "股四头肌"],
+            reason: "帮助温和激活大腿前侧。",
+          },
+        ],
+      }),
+    );
+
+    expect(result.recommendedActions?.[0]).toMatchObject({
+      title: "坐姿伸膝",
+      bodyRegion: "knee",
+      defaultDosage: "2 组 x 10 次",
+      reason: "帮助温和激活大腿前侧。",
+    });
+  });
+
+  it("adds generated rehab actions to the action library without a needs-video tag", () => {
+    const platform = createPlatformDemo();
+    const beforeCount = platform.actionLibrary.length;
+
+    const resolved = resolveRecommendedActions(
+      platform,
+      [
+        {
+          title: "坐姿伸膝",
+          bodyRegion: "knee",
+          phase: "镇痛与激活",
+          defaultDosage: "2 组 x 10 次",
+          instructions: ["坐稳后慢慢伸直膝盖", "停 2 秒再放下"],
+          contraindications: ["伸膝时疼痛超过 3/10"],
+          progressionCriteria: ["次日无明显加重"],
+          tags: ["膝盖", "股四头肌"],
+          reason: "帮助温和激活大腿前侧。",
+        },
+      ],
+      "knee",
+    );
+
+    expect(platform.actionLibrary).toHaveLength(beforeCount + 1);
+    expect(resolved[0].actionId).toBeTruthy();
+    const stored = platform.actionLibrary.find((action) => action.id === resolved[0].actionId);
+    expect(stored).toMatchObject({
+      title: "坐姿伸膝",
+      bodyRegion: "knee",
+      phase: "镇痛与激活",
+      defaultDosage: "2 组 x 10 次",
+    });
+    expect(stored?.tags).toContain("ai-generated");
+    expect(stored?.tags).toContain("rehab");
+    expect(stored?.tags).not.toContain("needs-video");
+  });
+
   it("does not advance a knee guided flow when the user asks an unrelated question", async () => {
     let fetchCalls = 0;
     const fetcher = async () => {
@@ -1513,6 +1581,100 @@ describe("training plan memory", () => {
     expect(() => deleteRememberedCase(platform, userId, "case_knee_1")).toThrow(
       "Accepted prescription cases cannot be deleted",
     );
+  });
+});
+
+describe("compressed user memory", () => {
+  it("builds a bounded prompt context from summaries instead of full memory history", () => {
+    const memory = {
+      userId: "user_1",
+      profileSummary: "中级跑者，每周跑步 4 次。",
+      clinicalSummary: "右膝前痛，上下楼 3/10，无明显肿胀。",
+      activePlanSummary: "今日训练：坐姿伸膝 2 组 x 10 次。",
+      recentEvents: Array.from({ length: 8 }, (_, index) => ({
+        id: `event_${index}`,
+        type: "case_updated" as const,
+        summary: `事件 ${index}`,
+        createdAt: `2026-07-0${index}T00:00:00.000Z`,
+      })),
+      cases: Array.from({ length: 30 }, (_, index) => ({
+        id: `case_${index}`,
+        categoryId: "knee" as const,
+        title: `很久以前的完整病例 ${index}`,
+        summary: "这段很长的原始病例不应该进入 prompt。",
+        status: "咨询中",
+        createdAt: `2026-06-${String(index + 1).padStart(2, "0")}`,
+      })),
+      trainingPlans: [],
+      notes: ["这条原始 note 不应该在有 profileSummary 时重复注入。"],
+      updatedAt: "2026-07-04T00:00:00.000Z",
+    };
+
+    const context = buildUserMemoryContext(memory);
+
+    expect(context).toContain("中级跑者");
+    expect(context).toContain("右膝前痛");
+    expect(context).toContain("坐姿伸膝");
+    expect(context).toContain("事件 7");
+    expect(context).not.toContain("很久以前的完整病例 0");
+    expect(context).not.toContain("这段很长的原始病例");
+    expect(context.length).toBeLessThanOrEqual(1200);
+  });
+
+  it("keeps memory summaries fresh when cases and plans are remembered", () => {
+    const platform = createPlatformDemo();
+    const userId = "user_1";
+
+    rememberCase(platform, userId, {
+      id: "case_new",
+      categoryId: "knee",
+      title: "上楼膝前痛",
+      summary: "无肿胀，疼痛 3/10",
+      status: "咨询中",
+      createdAt: "07/04 21:40",
+    });
+    const memory = rememberTrainingPlan(platform, userId, {
+      id: "plan_case_new",
+      caseId: "case_new",
+      categoryId: "knee",
+      title: "膝前痛低刺激训练",
+      status: "active",
+      dayLabel: "今日训练",
+      completionPercent: 0,
+      items: [{ title: "坐姿伸膝", meta: "2 组 x 10 次", state: "todo" }],
+      stage: {
+        name: "镇痛与激活",
+        progressLabel: "第 1 天",
+        progressPercent: 0,
+        goals: ["次日无明显加重"],
+      },
+    });
+
+    expect(memory.clinicalSummary).toContain("上楼膝前痛");
+    expect(memory.activePlanSummary).toContain("坐姿伸膝");
+    expect(memory.recentEvents[0].summary).toContain("膝前痛低刺激训练");
+    expect(memory.recentEvents.length).toBeLessThanOrEqual(5);
+  });
+
+  it("injects compressed user memory into the chat prompt", () => {
+    const prompt = buildChatSystemPrompt({
+      category: "knee",
+      userMemory: {
+        userId: "user_1",
+        profileSummary: "中级跑者，每周训练 4 次。",
+        clinicalSummary: "膝前痛，久坐后加重。",
+        activePlanSummary: "",
+        recentEvents: [],
+        cases: [],
+        trainingPlans: [],
+        notes: [],
+        updatedAt: "2026-07-04T00:00:00.000Z",
+      },
+    });
+
+    expect(prompt).toContain("用户记忆摘要");
+    expect(prompt).toContain("中级跑者");
+    expect(prompt).toContain("膝前痛");
   });
 });
 

@@ -142,8 +142,19 @@ export type MemoryTrainingPlanInput = Omit<MemoryTrainingPlan, "updatedAt"> & {
   updatedAt?: string;
 };
 
+export interface MemoryEvent {
+  id: string;
+  type: "case_updated" | "plan_updated" | "note_updated";
+  summary: string;
+  createdAt: string;
+}
+
 export interface UserMemory {
   userId: string;
+  profileSummary: string;
+  clinicalSummary: string;
+  activePlanSummary: string;
+  recentEvents: MemoryEvent[];
   cases: MemoryCaseSummary[];
   trainingPlans: MemoryTrainingPlan[];
   notes: string[];
@@ -255,11 +266,25 @@ export interface ChatPlanPatch {
   };
 }
 
+export interface ChatRecommendedAction {
+  actionId?: string;
+  title: string;
+  bodyRegion: ActionLibraryItem["bodyRegion"];
+  phase: string;
+  defaultDosage: string;
+  instructions: string[];
+  contraindications: string[];
+  progressionCriteria: string[];
+  tags: string[];
+  reason?: string;
+}
+
 export interface GuidedChatResult extends ChatResult {
   question?: string;
   options?: ChatOption[];
   assessmentStep?: string;
   planPatch?: ChatPlanPatch;
+  recommendedActions?: ChatRecommendedAction[];
 }
 
 export type RehabConsultCategory = "knee" | "ankle" | "shoulder" | "lower_back" | "hip";
@@ -282,6 +307,8 @@ export interface RagEvidenceSnippet {
 export interface ChatContext {
   category?: RehabConsultCategory;
   ragContext?: RagEvidenceSnippet[];
+  actionLibrary?: ActionLibraryItem[];
+  userMemory?: UserMemory;
 }
 
 export interface QwenChatClientOptions {
@@ -384,6 +411,10 @@ export function createPlatformDemo(): PlatformDemo {
     userMemories: {
       user_1: {
         userId: "user_1",
+        profileSummary: "中级跑者，每周训练 4-5 次，目标是安全恢复跑步。",
+        clinicalSummary: "",
+        activePlanSummary: "",
+        recentEvents: [],
         cases: [],
         trainingPlans: [],
         notes: ["中级跑者，每周训练 4-5 次，目标是安全恢复跑步。"],
@@ -614,6 +645,10 @@ function trimRegistrationField(value: unknown): string {
 function emptyUserMemory(userId: string): UserMemory {
   return {
     userId,
+    profileSummary: "",
+    clinicalSummary: "",
+    activePlanSummary: "",
+    recentEvents: [],
     cases: [],
     trainingPlans: [],
     notes: [],
@@ -640,6 +675,10 @@ export function getUserMemory(platform: PlatformDemo, userId: string): UserMemor
 
   platform.userMemories[userId] ??= {
     userId,
+    profileSummary: "",
+    clinicalSummary: "",
+    activePlanSummary: "",
+    recentEvents: [],
     cases: [],
     trainingPlans: [],
     notes: [],
@@ -653,6 +692,8 @@ export function rememberCase(platform: PlatformDemo, userId: string, input: Memo
   const memory = getUserMemory(platform, userId);
   const nextCase = { ...input, createdAt: input.createdAt || new Date().toISOString() };
   memory.cases = [nextCase, ...memory.cases.filter((candidate) => candidate.id !== nextCase.id)];
+  memory.clinicalSummary = summarizeClinicalMemory(memory.cases);
+  addMemoryEvent(memory, "case_updated", `记录病例：${nextCase.title}，${nextCase.summary || nextCase.status}`);
   memory.updatedAt = new Date().toISOString();
   return memory;
 }
@@ -691,8 +732,48 @@ export function rememberTrainingPlan(
   memory.cases = memory.cases.map((candidate) =>
     candidate.id === nextPlan.caseId ? { ...candidate, status: "运动处方已接受" } : candidate,
   );
+  memory.clinicalSummary = summarizeClinicalMemory(memory.cases);
+  memory.activePlanSummary = summarizeActivePlans(memory.trainingPlans);
+  addMemoryEvent(memory, "plan_updated", `接受训练计划：${nextPlan.title}，${summarizePlanItems(nextPlan.items)}`);
   memory.updatedAt = now;
   return memory;
+}
+
+function addMemoryEvent(memory: UserMemory, type: MemoryEvent["type"], summary: string): void {
+  const event: MemoryEvent = {
+    id: `memory_${demoTokenId()}`,
+    type,
+    summary: truncateForMemory(summary, 90),
+    createdAt: new Date().toISOString(),
+  };
+  memory.recentEvents = [event, ...(memory.recentEvents ?? [])].slice(0, 5);
+}
+
+function summarizeClinicalMemory(cases: MemoryCaseSummary[]): string {
+  const summaries = cases.slice(0, 3).map((patientCase) => {
+    const status = patientCase.status ? `，${patientCase.status}` : "";
+    const summary = patientCase.summary ? `：${patientCase.summary}` : "";
+    return `${patientCase.title}${status}${summary}`;
+  });
+  return truncateForMemory(summaries.join("；"), 320);
+}
+
+function summarizeActivePlans(plans: MemoryTrainingPlan[]): string {
+  const activePlans = plans.filter((plan) => plan.status === "active").slice(0, 2);
+  const summaries = activePlans.map((plan) => `${plan.title}，${plan.dayLabel}，动作：${summarizePlanItems(plan.items)}`);
+  return truncateForMemory(summaries.join("；"), 320);
+}
+
+function summarizePlanItems(items: MemoryTrainingPlan["items"]): string {
+  return items
+    .slice(0, 5)
+    .map((item) => `${item.title} ${item.meta}`)
+    .join("、");
+}
+
+function truncateForMemory(content: string, maxLength: number): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 1)}…`;
 }
 
 export interface ConsultationCreateInput {
@@ -1087,6 +1168,97 @@ export function sendConsultationMessage(
 
 export function listActionLibrary(platform: PlatformDemo): ActionLibraryItem[] {
   return platform.actionLibrary;
+}
+
+export function resolveRecommendedActions(
+  platform: PlatformDemo,
+  actions: ChatRecommendedAction[] = [],
+  category?: RehabConsultCategory,
+): ChatRecommendedAction[] {
+  const fallbackBodyRegion = actionBodyRegionForCategory(category);
+  return actions.map((action) => {
+    const existingById = action.actionId
+      ? platform.actionLibrary.find((candidate) => candidate.id === action.actionId)
+      : undefined;
+    if (existingById) {
+      return actionFromLibraryItem(existingById, action.reason);
+    }
+
+    const bodyRegion = action.bodyRegion === "other" ? fallbackBodyRegion : action.bodyRegion;
+    const existingByTitle = platform.actionLibrary.find(
+      (candidate) =>
+        candidate.bodyRegion === bodyRegion &&
+        normalizeComparableText(candidate.title) === normalizeComparableText(action.title),
+    );
+    if (existingByTitle) {
+      return actionFromLibraryItem(existingByTitle, action.reason);
+    }
+
+    const generated: ActionLibraryItem = {
+      id: generatedActionId(bodyRegion, action.title, action.defaultDosage),
+      title: action.title,
+      bodyRegion,
+      phase: action.phase,
+      defaultDosage: action.defaultDosage,
+      instructions: action.instructions,
+      contraindications: action.contraindications,
+      progressionCriteria: action.progressionCriteria,
+      tags: mergeActionTags(["ai-generated", "rehab", bodyRegion, ...action.tags]),
+    };
+    const duplicateId = platform.actionLibrary.find((candidate) => candidate.id === generated.id);
+    const stored = duplicateId ? duplicateId : generated;
+    if (!duplicateId) {
+      platform.actionLibrary = [stored, ...platform.actionLibrary];
+    }
+    return actionFromLibraryItem(stored, action.reason);
+  });
+}
+
+function actionFromLibraryItem(action: ActionLibraryItem, reason?: string): ChatRecommendedAction {
+  return {
+    actionId: action.id,
+    title: action.title,
+    bodyRegion: action.bodyRegion,
+    phase: action.phase,
+    defaultDosage: action.defaultDosage,
+    instructions: action.instructions,
+    contraindications: action.contraindications,
+    progressionCriteria: action.progressionCriteria,
+    tags: action.tags,
+    reason,
+  };
+}
+
+function mergeActionTags(tags: string[]): string[] {
+  const seen = new Set<string>();
+  return tags
+    .map((tag) => sanitizeActionText(tag).toLowerCase())
+    .filter((tag) => tag && tag !== "needs-video")
+    .filter((tag) => {
+      if (seen.has(tag)) {
+        return false;
+      }
+      seen.add(tag);
+      return true;
+    })
+    .slice(0, 12);
+}
+
+function normalizeComparableText(value: string): string {
+  return value.replace(/\s+/g, "").toLowerCase();
+}
+
+function generatedActionId(bodyRegion: ActionLibraryItem["bodyRegion"], title: string, dosage: string): string {
+  return `ai_rehab_${bodyRegion}_${hashActionKey(`${title}:${dosage}`)}`;
+}
+
+function hashActionKey(value: string): string {
+  let hash = 2166136261;
+  for (const char of value) {
+    hash ^= char.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 export interface ClinicianPlanInput {
@@ -1515,15 +1687,39 @@ export function buildChatSystemPrompt(context: ChatContext = {}): string {
     ].join("\n"),
     [
       "输出格式：只返回一个 JSON 对象，不要包裹代码块。",
-      'JSON 字段：{"content":"给用户看的回答","question":"下一步只问一个问题，可省略","options":[{"label":"按钮文案","value":"点击后发送给模型的完整回答"}]}',
+      'JSON 字段：{"content":"给用户看的回答","question":"下一步只问一个问题，可省略","options":[{"label":"按钮文案","value":"点击后发送给模型的完整回答"}],"recommendedActions":[{"actionId":"已有动作 id，可省略","title":"动作名","bodyRegion":"knee","phase":"阶段","defaultDosage":"剂量","instructions":["步骤"],"contraindications":["停止条件"],"progressionCriteria":["进阶标准"],"tags":["标签"],"reason":"为什么推荐"}]}',
       "如果不需要按钮，省略 question 和 options。",
+      "如果推荐训练动作，必须放在 recommendedActions，不要只把动作写进 content 散文里。",
+      "优先使用可用动作库里的 actionId；如果没有合适动作，可以生成新的运动康复动作，但必须完整填写 recommendedActions 字段。",
       "content 必须能单独成立；question 和 options 只是结构化交互辅助。",
     ].join("\n"),
+    formatActionLibraryContext(context.actionLibrary ?? [], context.category),
+    buildUserMemoryContext(context.userMemory),
     categoryScope,
     ragContext
       ? `可用 RAG 证据：\n${ragContext}\n回答必须优先使用这些证据；如果证据不足，明确说明需要补充信息，不要编造来源。`
       : "当前第一版还没有接入实时 RAG 检索。不要编造 RAG 引用、论文名、页码或不存在的证据来源。",
   ].join("\n\n");
+}
+
+export function buildUserMemoryContext(memory?: UserMemory): string {
+  if (!memory) {
+    return "用户记忆摘要：暂无。";
+  }
+
+  const profileSummary = memory.profileSummary || memory.notes.slice(0, 2).join("；");
+  const sections = [
+    "用户记忆摘要（压缩版，仅供个性化问诊使用，不代表诊断）：",
+    profileSummary ? `画像：${truncateForMemory(profileSummary, 220)}` : "",
+    memory.clinicalSummary ? `康复摘要：${truncateForMemory(memory.clinicalSummary, 320)}` : "",
+    memory.activePlanSummary ? `当前计划：${truncateForMemory(memory.activePlanSummary, 320)}` : "",
+    ...(memory.recentEvents ?? [])
+      .slice()
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, 5)
+      .map((event) => `最近事件：${truncateForMemory(event.summary, 70)}`),
+  ].filter(Boolean);
+  return truncateForMemory(sections.join("\n"), 1200);
 }
 
 export function buildGuidedChatResponse(
@@ -1540,6 +1736,7 @@ export function buildGuidedChatResponse(
     model: "llm",
     question: parsed.question,
     options: parsed.options,
+    recommendedActions: parsed.recommendedActions,
   };
 }
 
@@ -1565,7 +1762,9 @@ function initialOpenQuestion(category: RehabConsultCategory | undefined, latestU
   return "请先选择咨询部位，或直接描述你的不适。";
 }
 
-function parseModelGuidedChatOutput(rawContent: string): Pick<GuidedChatResult, "content" | "question" | "options"> {
+function parseModelGuidedChatOutput(
+  rawContent: string,
+): Pick<GuidedChatResult, "content" | "question" | "options" | "recommendedActions"> {
   const raw = rawContent.trim();
   const jsonText = stripJsonCodeFence(raw);
   try {
@@ -1573,10 +1772,12 @@ function parseModelGuidedChatOutput(rawContent: string): Pick<GuidedChatResult, 
     const content = sanitizeAssistantContent(readFirstString(parsed, ["content", "answer", "message"]));
     const question = sanitizeAssistantContent(readFirstString(parsed, ["question"]));
     const options = normalizeModelOptions(parsed.options);
+    const recommendedActions = normalizeRecommendedActions(parsed.recommendedActions);
     return {
       content,
       question: question || undefined,
       options: options.length > 0 ? options : undefined,
+      recommendedActions: recommendedActions.length > 0 ? recommendedActions : undefined,
     };
   } catch {
     return { content: sanitizeAssistantContent(raw) };
@@ -1629,8 +1830,115 @@ function normalizeModelOptions(value: unknown): ChatOption[] {
     .slice(0, 6);
 }
 
+function normalizeRecommendedActions(value: unknown): ChatRecommendedAction[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const action = entry as Record<string, unknown>;
+      const title = sanitizeActionText(readFirstString(action, ["title", "name"]));
+      const phase = sanitizeActionText(readFirstString(action, ["phase"]));
+      const defaultDosage = sanitizeActionText(readFirstString(action, ["defaultDosage", "dosage", "meta"]));
+      const bodyRegion = normalizeActionBodyRegion(readFirstString(action, ["bodyRegion"]));
+      if (!title || !phase || !defaultDosage) {
+        return null;
+      }
+      const actionId = sanitizeActionId(readFirstString(action, ["actionId", "id"]));
+      const reason = sanitizeActionText(readFirstString(action, ["reason", "rationale"]));
+      const recommendedAction: ChatRecommendedAction = {
+        title,
+        bodyRegion,
+        phase,
+        defaultDosage,
+        instructions: normalizeStringList(action.instructions).slice(0, 5),
+        contraindications: normalizeStringList(action.contraindications).slice(0, 5),
+        progressionCriteria: normalizeStringList(action.progressionCriteria).slice(0, 5),
+        tags: normalizeStringList(action.tags).slice(0, 10),
+      };
+      if (actionId) {
+        recommendedAction.actionId = actionId;
+      }
+      if (reason) {
+        recommendedAction.reason = reason;
+      }
+      return recommendedAction;
+    })
+    .filter((action): action is ChatRecommendedAction => Boolean(action))
+    .slice(0, 4);
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => (typeof item === "string" ? sanitizeActionText(item) : ""))
+    .filter(Boolean);
+}
+
+function sanitizeActionText(content: string): string {
+  return content.replace(/\s+/g, " ").trim().slice(0, 120);
+}
+
+function sanitizeActionId(content: string): string {
+  return content.replace(/[^a-zA-Z0-9_-]/g, "").trim().slice(0, 80);
+}
+
+function normalizeActionBodyRegion(value: string): ActionLibraryItem["bodyRegion"] {
+  const normalized = value.trim();
+  if (
+    normalized === "knee" ||
+    normalized === "ankle_foot" ||
+    normalized === "hip" ||
+    normalized === "spine" ||
+    normalized === "shoulder" ||
+    normalized === "other"
+  ) {
+    return normalized;
+  }
+  return "other";
+}
+
 function sanitizeOptionText(content: string): string {
   return content.replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+function actionBodyRegionForCategory(category?: RehabConsultCategory): ActionLibraryItem["bodyRegion"] {
+  switch (category) {
+    case "knee":
+      return "knee";
+    case "ankle":
+      return "ankle_foot";
+    case "shoulder":
+      return "shoulder";
+    case "lower_back":
+      return "spine";
+    case "hip":
+      return "hip";
+    default:
+      return "other";
+  }
+}
+
+function formatActionLibraryContext(actions: ActionLibraryItem[], category?: RehabConsultCategory): string {
+  const bodyRegion = actionBodyRegionForCategory(category);
+  const relevantActions = actions
+    .filter((action) => bodyRegion === "other" || action.bodyRegion === bodyRegion)
+    .slice(0, 12);
+  if (relevantActions.length === 0) {
+    return "可用动作库：当前类别暂无足够康复动作；可以生成新的结构化康复动作。";
+  }
+  return [
+    "可用动作库（优先复用 actionId）：",
+    ...relevantActions.map(
+      (action) =>
+        `- ${action.id}: ${action.title}；${action.bodyRegion}；${action.phase}；${action.defaultDosage}`,
+    ),
+  ].join("\n");
 }
 
 function isAcceptedPrescriptionStatus(status: string): boolean {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import mentisMark from "./assets/mentis-mark-transparent.png";
 import rezLogo from "./assets/rez-logo.png";
 import { loadStoredSession, storeSession, validateStoredSession } from "./authSession";
@@ -9,6 +9,7 @@ type ChatMessage = {
   content: string;
   question?: string;
   options?: ChatOption[];
+  recommendedActions?: ChatRecommendedAction[];
   assessmentStep?: string;
   planPatch?: ChatPlanPatch;
 };
@@ -17,6 +18,19 @@ type ChatOption = {
   id: string;
   label: string;
   value: string;
+};
+
+type ChatRecommendedAction = {
+  actionId?: string;
+  title: string;
+  bodyRegion: ActionBodyRegion;
+  phase: string;
+  defaultDosage: string;
+  instructions: string[];
+  contraindications: string[];
+  progressionCriteria: string[];
+  tags: string[];
+  reason?: string;
 };
 
 type ChatPlanPatch = Partial<CasePlan>;
@@ -62,10 +76,21 @@ type MemoryCaseSummary = {
 
 type UserMemory = {
   userId: string;
+  profileSummary: string;
+  clinicalSummary: string;
+  activePlanSummary: string;
+  recentEvents: MemoryEvent[];
   cases: MemoryCaseSummary[];
   trainingPlans: MemoryTrainingPlan[];
   notes: string[];
   updatedAt: string;
+};
+
+type MemoryEvent = {
+  id: string;
+  type: "case_updated" | "plan_updated" | "note_updated";
+  summary: string;
+  createdAt: string;
 };
 
 type MemoryTrainingPlan = {
@@ -99,9 +124,14 @@ type RehabConsultCategory = {
 };
 
 type CasePlanItem = {
+  actionId?: string;
   title: string;
   meta: string;
   state: "done" | "todo";
+  phase?: string;
+  instructions?: string[];
+  contraindications?: string[];
+  progressionCriteria?: string[];
 };
 
 type CasePlan = {
@@ -495,6 +525,57 @@ export function App() {
     );
   }
 
+  function addRecommendedActionToPlan(action: ChatRecommendedAction) {
+    if (!activeCase) {
+      return;
+    }
+    const existingPlan = activeCase.plan;
+    const nextItem: CasePlanItem = {
+      actionId: action.actionId,
+      title: action.title,
+      meta: action.defaultDosage,
+      state: "todo",
+      phase: action.phase,
+      instructions: action.instructions,
+      contraindications: action.contraindications,
+      progressionCriteria: action.progressionCriteria,
+    };
+    const existingItems = existingPlan?.items ?? [];
+    const isDuplicate = existingItems.some((item) =>
+      action.actionId ? item.actionId === action.actionId : item.title === action.title,
+    );
+    const nextPlan: CasePlan = existingPlan
+      ? {
+          ...existingPlan,
+          items: isDuplicate ? existingItems : [...existingItems, nextItem],
+          stage: {
+            ...existingPlan.stage,
+            goals: mergePlanGoals(existingPlan.stage.goals, action.progressionCriteria),
+          },
+        }
+      : {
+          title: `${activeCase.title === pendingComplaintTitle ? "康复" : activeCase.title}训练计划`,
+          dayLabel: "今日训练",
+          completionPercent: 0,
+          items: [nextItem],
+          stage: {
+            name: action.phase,
+            progressLabel: "第 1 天",
+            progressPercent: 0,
+            goals: action.progressionCriteria.length > 0 ? action.progressionCriteria.slice(0, 3) : ["完成后 24 小时无明显加重"],
+          },
+        };
+
+    setCases((currentCases) =>
+      currentCases.map((patientCase) =>
+        patientCase.id === activeCase.id
+          ? { ...patientCase, plan: nextPlan, status: "运动处方已接受" }
+          : patientCase,
+      ),
+    );
+    void rememberTrainingPlanForCurrentUser({ ...activeCase, plan: nextPlan, status: "运动处方已接受" }, nextPlan);
+  }
+
   function resetCategory() {
     setActiveCaseId(null);
     setInput("");
@@ -571,6 +652,7 @@ export function App() {
         content: string;
         question?: string;
         options?: ChatOption[];
+        recommendedActions?: ChatRecommendedAction[];
         assessmentStep?: string;
         planPatch?: ChatPlanPatch;
       };
@@ -579,6 +661,7 @@ export function App() {
         content: data.content,
         question: data.question,
         options: Array.isArray(data.options) ? data.options : undefined,
+        recommendedActions: Array.isArray(data.recommendedActions) ? data.recommendedActions : undefined,
         assessmentStep: data.assessmentStep,
         planPatch: data.planPatch,
       };
@@ -1148,7 +1231,9 @@ export function App() {
                     disabled={isSending}
                     key={`${message.role}-${index}`}
                     message={message}
+                    onAddRecommendedAction={addRecommendedActionToPlan}
                     onSelectOption={(option) => sendMessage(option.value || option.label)}
+                    onSubmitSupplement={(content) => sendMessage(content)}
                   />
                 ))}
                 {isSending ? (
@@ -1366,6 +1451,19 @@ function PlansPage({
                     <div>
                       <strong>{item.title}</strong>
                       <small>{item.meta}</small>
+                      {item.instructions && item.instructions.length > 0 ? (
+                        <ul className="training-detail-list">
+                          {item.instructions.slice(0, 5).map((instruction) => (
+                            <li key={instruction}>{instruction}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {item.contraindications && item.contraindications.length > 0 ? (
+                        <small className="training-caution">停止条件：{item.contraindications.slice(0, 3).join("；")}</small>
+                      ) : null}
+                      {item.progressionCriteria && item.progressionCriteria.length > 0 ? (
+                        <small className="training-caution">进阶标准：{item.progressionCriteria.slice(0, 3).join("；")}</small>
+                      ) : null}
                     </div>
                     <em>{item.state === "done" ? "已完成" : "待完成"}</em>
                   </li>
@@ -1588,6 +1686,10 @@ function displayTrainingPlans(memoryPlans: MemoryTrainingPlan[], cases: PatientC
     });
   }
   return Array.from(planByCaseId.values()).sort((first, second) => second.updatedAt.localeCompare(first.updatedAt));
+}
+
+function mergePlanGoals(currentGoals: string[], nextGoals: string[]): string[] {
+  return Array.from(new Set([...currentGoals, ...nextGoals].filter(Boolean))).slice(0, 5);
 }
 
 function makeComplaintTitle(content: string) {
@@ -2955,17 +3057,25 @@ function Panel({
   );
 }
 
-function MessageBubble({
+export function MessageBubble({
   disabled = false,
   message,
+  onAddRecommendedAction,
   onSelectOption,
+  onSubmitSupplement,
 }: {
   disabled?: boolean;
   message: ChatMessage;
+  onAddRecommendedAction?: (action: ChatRecommendedAction) => void;
   onSelectOption?: (option: ChatOption) => void;
+  onSubmitSupplement?: (content: string) => void;
 }) {
+  const [supplement, setSupplement] = useState("");
+  const supplementId = useId();
   const isAssistant = message.role === "assistant";
   const options = isAssistant && Array.isArray(message.options) ? message.options : [];
+  const recommendedActions = isAssistant && Array.isArray(message.recommendedActions) ? message.recommendedActions : [];
+  const canSupplement = options.length > 0;
   return (
     <article className={isAssistant ? "message assistant" : "message user"}>
       {isAssistant ? <AiAvatar /> : null}
@@ -2988,6 +3098,49 @@ function MessageBubble({
               </button>
             ))}
           </div>
+        ) : null}
+        {recommendedActions.length > 0 ? (
+          <div className="recommended-actions">
+            {recommendedActions.map((action) => (
+              <article className="recommended-action-card" key={action.actionId ?? action.title}>
+                <div>
+                  <strong>{action.title}</strong>
+                  <span>{action.phase} · {action.defaultDosage}</span>
+                </div>
+                <button disabled={disabled} onClick={() => onAddRecommendedAction?.(action)} type="button">
+                  加入今日计划
+                </button>
+              </article>
+            ))}
+          </div>
+        ) : null}
+        {canSupplement ? (
+          <form
+            className="message-supplement"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const content = supplement.trim();
+              if (!content || disabled) {
+                return;
+              }
+              onSubmitSupplement?.(content);
+              setSupplement("");
+            }}
+          >
+            <label htmlFor={supplementId}>补充描述</label>
+            <div className="message-supplement-row">
+              <input
+                disabled={disabled}
+                id={supplementId}
+                onChange={(event) => setSupplement(event.target.value)}
+                placeholder="如果没有合适选项，可以自己补充"
+                value={supplement}
+              />
+              <button disabled={disabled || !supplement.trim()} type="submit">
+                发送
+              </button>
+            </div>
+          </form>
         ) : null}
         {isAssistant && message.content.includes("参考依据") ? (
           <div className="citation-actions">

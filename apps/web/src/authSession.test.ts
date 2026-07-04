@@ -10,6 +10,10 @@ const storedSession: AuthSession = {
   },
   memory: {
     userId: "user_rez",
+    profileSummary: "",
+    clinicalSummary: "",
+    activePlanSummary: "",
+    recentEvents: [],
     cases: [],
     trainingPlans: [],
     notes: [],

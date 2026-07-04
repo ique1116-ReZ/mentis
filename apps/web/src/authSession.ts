@@ -17,6 +17,10 @@ export type AuthSession = {
   user: AuthUser;
   memory: {
     userId: string;
+    profileSummary: string;
+    clinicalSummary: string;
+    activePlanSummary: string;
+    recentEvents: unknown[];
     cases: unknown[];
     trainingPlans: unknown[];
     notes: string[];

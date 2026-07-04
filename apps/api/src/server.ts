@@ -23,6 +23,7 @@ import {
   rememberCase,
   rememberTrainingPlan,
   reviewClinicianCredential,
+  resolveRecommendedActions,
   resolveAuthenticatedActor,
   resolveCorsOrigin,
   runAssessmentWorkflow,
@@ -348,7 +349,16 @@ const server = createServer(async (request, response) => {
       const body = await readJson(request);
       const messages = Array.isArray(body.messages) ? (body.messages as ChatMessage[]) : [];
       const category = typeof body.category === "string" ? (body.category as RehabConsultCategory) : undefined;
-      const result = await chatWithQwen(messages, { category });
+      const userId = typeof body.userId === "string" ? body.userId : "";
+      const userMemory = platform.users.some((user) => user.id === userId) ? getUserMemory(platform, userId) : undefined;
+      const result = await chatWithQwen(messages, { category, actionLibrary: platform.actionLibrary, userMemory });
+      const recommendedActions =
+        result.recommendedActions && result.recommendedActions.length > 0
+          ? resolveRecommendedActions(platform, result.recommendedActions, category)
+          : undefined;
+      if (recommendedActions) {
+        result.recommendedActions = recommendedActions;
+      }
       response.end(JSON.stringify(result));
       return;
     }

@@ -846,6 +846,106 @@ svg {
   opacity: 0.55;
 }
 
+.recommended-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.recommended-action-card {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 520px;
+  padding: 10px 12px;
+  border: 1px solid rgba(36, 31, 26, 0.14);
+  border-radius: 7px;
+  background: #fffdf8;
+}
+
+.recommended-action-card div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.recommended-action-card strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.recommended-action-card span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.recommended-action-card button {
+  min-height: 32px;
+  flex: 0 0 auto;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  color: white;
+  background: var(--orange);
+  font-weight: 800;
+}
+
+.recommended-action-card button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.message-supplement {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.message-supplement label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.message-supplement-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  max-width: 520px;
+}
+
+.message-supplement input {
+  min-width: 0;
+  flex: 1;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(36, 31, 26, 0.16);
+  border-radius: 7px;
+  outline: 0;
+  background: #fffdf8;
+}
+
+.message-supplement input:focus {
+  border-color: rgba(217, 119, 87, 0.58);
+  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.12);
+}
+
+.message-supplement button {
+  min-width: 58px;
+  height: 36px;
+  border: 0;
+  border-radius: 7px;
+  color: white;
+  background: var(--orange);
+  font-weight: 800;
+}
+
+.message-supplement button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
 .typing-content {
   display: inline-flex;
   align-items: center;
@@ -1137,7 +1237,7 @@ svg {
   list-style: none;
 }
 
-.training-task-list li {
+.training-task-list > li {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) auto;
   gap: 12px;
@@ -1149,14 +1249,14 @@ svg {
   background: #fffaf1;
 }
 
-.training-task-list li > span,
+.training-task-list > li > span,
 .stage-roadmap div > span,
 .record-row button:first-child > span {
   display: grid;
   place-items: center;
 }
 
-.training-task-list li > span {
+.training-task-list > li > span {
   width: 32px;
   height: 32px;
   border-radius: 7px;
@@ -1181,6 +1281,19 @@ svg {
   background: var(--green-soft);
   font-style: normal;
   font-weight: 800;
+}
+
+.training-detail-list {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.training-caution {
+  margin-top: 6px;
 }
 
 .stage-roadmap {
@@ -2590,7 +2703,7 @@ button.clinician-card.active {
     padding-left: 0;
   }
 
-  .training-task-list li,
+  .training-task-list > li,
   .record-row {
     grid-template-columns: 1fr;
   }
