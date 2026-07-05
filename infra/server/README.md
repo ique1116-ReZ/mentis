@@ -38,15 +38,43 @@ sudo chown -R mentis:mentis /opt/mentis-rehab-platform
 
 Install Node.js 24 LTS or a compatible Node.js version before running the API.
 
-Deploy application code:
+Deploy application code as a new timestamped release, then flip the `current` symlink:
 
 ```bash
-cd /opt/mentis-rehab-platform
-sudo -u mentis git clone YOUR_REPO_URL . || sudo -u mentis git pull
+RELEASE=/opt/mentis-rehab-platform/releases/$(date +%Y%m%d%H%M)-$(git rev-parse --short HEAD)
+sudo -u mentis mkdir -p "$RELEASE"
+sudo -u mentis git clone --depth 1 YOUR_REPO_URL "$RELEASE"
+cd "$RELEASE"
 sudo -u mentis npm ci
 sudo -u mentis npm run build -w @mentis/domain
 sudo -u mentis npm run build -w @mentis/api
+sudo -u mentis ln -sfn "$RELEASE" /opt/mentis-rehab-platform/current
+sudo systemctl restart mentis-api
+sudo systemctl status mentis-api --no-pager
 ```
+
+Secrets are provided via a systemd drop-in (never commit these — check with `sudo systemctl cat mentis-api` to see what's already configured before overwriting):
+
+```bash
+sudo systemctl edit mentis-api
+```
+
+```ini
+[Service]
+Environment=DASHSCOPE_API_KEY=sk-...
+Environment=DASHSCOPE_MODEL=qwen3.7-plus
+Environment=DASHSCOPE_TIMEOUT_MS=60000
+Environment=MENTIS_DEMO_USERNAME=...
+Environment=MENTIS_DEMO_PASSWORD=...
+Environment=MENTIS_CLINICIAN_DEMO_USERNAME=clinician_demo
+Environment=MENTIS_CLINICIAN_DEMO_PASSWORD=change-me
+Environment=MENTIS_ADMIN_DEMO_USERNAME=admin_demo
+Environment=MENTIS_ADMIN_DEMO_PASSWORD=change-me
+```
+
+In production, `MENTIS_CLINICIAN_DEMO_USERNAME/PASSWORD` and `MENTIS_ADMIN_DEMO_USERNAME/PASSWORD` are required — the server refuses to start with the built-in dev defaults (`clinician_demo`/`mentis_clinician`, `admin_demo`/`mentis_admin`) when `NODE_ENV=production`. Pick real passwords here.
+
+The API persists all runtime state (users, cases, consultations, chat memory) to `MENTIS_DATA_FILE` (`/opt/mentis-rehab-platform/data/platform-state.json` per the unit file) so a restart, crash, or release swap doesn't wipe data. That path deliberately lives outside `releases/*` so it survives every new release directory.
 
 Install systemd service:
 

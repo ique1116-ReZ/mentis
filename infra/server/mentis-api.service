@@ -8,6 +8,11 @@ WorkingDirectory=/opt/mentis-rehab-platform/current
 Environment=NODE_ENV=production
 Environment=PORT=3001
 Environment=WEB_ORIGINS=https://aimentis.site,https://www.aimentis.site
+Environment=MENTIS_DATA_FILE=/opt/mentis-rehab-platform/data/platform-state.json
+# Secrets (DASHSCOPE_API_KEY, DASHSCOPE_MODEL, DASHSCOPE_TIMEOUT_MS,
+# MENTIS_DEMO_USERNAME/PASSWORD, MENTIS_CLINICIAN_DEMO_USERNAME/PASSWORD,
+# MENTIS_ADMIN_DEMO_USERNAME/PASSWORD) are provided via a systemd drop-in:
+#   sudo systemctl edit mentis-api
 ExecStart=/usr/bin/node apps/api/dist/server.js
 Restart=always
 RestartSec=5
