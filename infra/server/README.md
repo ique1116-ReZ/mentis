@@ -1,5 +1,7 @@
 # Mentis Deployment Notes
 
+For the day-to-day "how do I ship a change" runbook (SSH coordinates, release/symlink steps, required env vars), see `../DEPLOY.md`. This file is the deeper one-time bootstrap reference for setting up a brand-new server from scratch.
+
 ## Target Shape
 
 - Web: GitHub Pages.
