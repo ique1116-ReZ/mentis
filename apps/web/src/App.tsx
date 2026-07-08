@@ -21,6 +21,7 @@ import { CategoryChooser } from "./components/CategoryChooser";
 import { ConsultationPanel } from "./components/ConsultationPanel";
 import { LoginScreen } from "./components/LoginScreen";
 import { MessageBubble } from "./components/MessageBubble";
+import { readApiErrorMessage } from "./apiError";
 import { PlansPage } from "./components/PlansPage";
 import { RecordsPage } from "./components/RecordsPage";
 import { Panel, PendingRecommendation, TinyIcon, TypingIndicator } from "./components/Shared";
@@ -397,7 +398,7 @@ export function App() {
       body: JSON.stringify({ username, password }),
     });
     if (!response.ok) {
-      throw new Error("login_failed");
+      throw new Error(await readApiErrorMessage(response, "登录失败，请检查账号密码或后端服务。"));
     }
 
     const nextSession = (await response.json()) as AuthSession;
@@ -416,7 +417,7 @@ export function App() {
       body: JSON.stringify(input),
     });
     if (!response.ok) {
-      throw new Error("register_failed");
+      throw new Error(await readApiErrorMessage(response, "注册失败，请检查邀请码、网络或后端服务。"));
     }
 
     const nextSession = (await response.json()) as AuthSession;

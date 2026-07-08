@@ -69,7 +69,15 @@ export function LoginScreen({
                 })
               : onLogin(username.trim(), password);
             action
-              .catch(() => setError(isRegistering ? "注册失败，请检查邀请码是否正确。" : "登录失败，请检查账号密码或后端服务。"))
+              .catch((error) =>
+                setError(
+                  error instanceof Error && error.message
+                    ? error.message
+                    : isRegistering
+                      ? "注册失败，请检查邀请码、网络或后端服务。"
+                      : "登录失败，请检查账号密码或后端服务。",
+                ),
+              )
               .finally(() => setIsLoggingIn(false));
           }}
         >
