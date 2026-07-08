@@ -81,6 +81,9 @@ export class QwenChatClient {
             ...messages,
           ],
           temperature: 0.2,
+          // Qwen3 思考模型默认每轮生成一长串推理链，导致 15s+ 延迟甚至超时。
+          // 引导式问诊不需要显式思考，关掉后延迟降到 ~1s。
+          enable_thinking: false,
         }),
       });
     } catch (error) {
