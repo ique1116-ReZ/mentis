@@ -38,6 +38,7 @@ import {
   type AssessmentWorkflowInput,
   type AuthenticatedActor,
   type ChatMessage,
+  type ChatRole,
   type ConsultationPaymentInput,
   type ConsultationSnapshot,
   type LoginInput,
@@ -356,7 +357,7 @@ const server = createServer(async (request, response) => {
       requireMemoryAccess(actor, userId);
 
       if (method === "GET") {
-        finish(response, method, listCaseMessages(platform, caseId));
+        finish(response, method, listCaseMessages(platform, userId, caseId));
         return;
       }
 
@@ -365,11 +366,8 @@ const server = createServer(async (request, response) => {
         if (!Array.isArray(body.messages)) {
           throw badRequest("messages must be an array");
         }
-        const incoming = (body.messages as StoredCaseMessage[]).map((entry) => ({
-          ...entry,
-          createdAt: entry.createdAt || new Date().toISOString(),
-        }));
-        finish(response, method, appendCaseMessages(platform, caseId, incoming));
+        const incoming = body.messages.map((entry) => readCaseMessageInput(entry));
+        finish(response, method, appendCaseMessages(platform, userId, caseId, incoming));
         return;
       }
     }
@@ -616,6 +614,33 @@ function requireStringArray(value: unknown, fieldName: string): string[] {
     throw badRequest(`${fieldName} is required`);
   }
   return result;
+}
+
+const CHAT_ROLES: ChatRole[] = ["system", "user", "assistant"];
+
+function requireChatRole(value: unknown): ChatRole {
+  if (typeof value === "string" && (CHAT_ROLES as string[]).includes(value)) {
+    return value as ChatRole;
+  }
+  throw badRequest("role is invalid");
+}
+
+function readCaseMessageInput(entry: unknown): StoredCaseMessage {
+  if (!entry || typeof entry !== "object") {
+    throw badRequest("Each message must be an object");
+  }
+  const record = entry as Record<string, unknown>;
+  return {
+    role: requireChatRole(record.role),
+    content: requireString(record.content, "content"),
+    question: optionalString(record.question),
+    assessmentStep: optionalString(record.assessmentStep),
+    options: Array.isArray(record.options) ? (record.options as StoredCaseMessage["options"]) : undefined,
+    recommendedActions: Array.isArray(record.recommendedActions)
+      ? (record.recommendedActions as StoredCaseMessage["recommendedActions"])
+      : undefined,
+    createdAt: optionalString(record.createdAt) ?? new Date().toISOString(),
+  };
 }
 
 function optionalStringArray(value: unknown): string[] {

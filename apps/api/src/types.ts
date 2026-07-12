@@ -47,7 +47,7 @@ export interface PlatformDemo {
   presence: Record<string, ConsultationPresence>;
   demoSessions: Record<string, DemoSessionRecord>;
   auditEvents: AuditEvent[];
-  caseMessages: Record<string, StoredCaseMessage[]>;
+  caseMessages: Record<string, Record<string, StoredCaseMessage[]>>; // userId -> caseId -> messages
 }
 
 export interface UserProfile {

@@ -9,22 +9,22 @@ function message(content: string, role: StoredCaseMessage["role"] = "user"): Sto
 describe("case messages", () => {
   it("returns an empty list for a case with no messages", () => {
     const platform = createPlatformDemo();
-    expect(listCaseMessages(platform, "case_unknown")).toEqual([]);
+    expect(listCaseMessages(platform, "user_1", "case_unknown")).toEqual([]);
   });
 
   it("appends messages in order and reads them back", () => {
     const platform = createPlatformDemo();
-    appendCaseMessages(platform, "case_1", [message("膝盖下楼梯疼")]);
-    appendCaseMessages(platform, "case_1", [message("疼多久了？", "assistant")]);
+    appendCaseMessages(platform, "user_1", "case_1", [message("膝盖下楼梯疼")]);
+    appendCaseMessages(platform, "user_1", "case_1", [message("疼多久了？", "assistant")]);
 
-    const stored = listCaseMessages(platform, "case_1");
+    const stored = listCaseMessages(platform, "user_1", "case_1");
     expect(stored.map((entry) => entry.content)).toEqual(["膝盖下楼梯疼", "疼多久了？"]);
     expect(stored[1].role).toBe("assistant");
   });
 
   it("keeps assistant options and recommended actions so the UI can restore them", () => {
     const platform = createPlatformDemo();
-    appendCaseMessages(platform, "case_1", [
+    appendCaseMessages(platform, "user_1", "case_1", [
       {
         role: "assistant",
         content: "试试腘绳肌拉伸",
@@ -45,7 +45,7 @@ describe("case messages", () => {
       },
     ]);
 
-    const [stored] = listCaseMessages(platform, "case_1");
+    const [stored] = listCaseMessages(platform, "user_1", "case_1");
     expect(stored.options?.[0].label).toBe("有缓解");
     expect(stored.recommendedActions?.[0].title).toBe("坐姿腘绳肌拉伸");
   });
@@ -55,11 +55,12 @@ describe("case messages", () => {
     const overflow = MAX_CASE_MESSAGES + 5;
     appendCaseMessages(
       platform,
+      "user_1",
       "case_1",
       Array.from({ length: overflow }, (_unused, index) => message(`m${index}`)),
     );
 
-    const stored = listCaseMessages(platform, "case_1");
+    const stored = listCaseMessages(platform, "user_1", "case_1");
     expect(stored).toHaveLength(MAX_CASE_MESSAGES);
     expect(stored[0].content).toBe("m5");
     expect(stored[MAX_CASE_MESSAGES - 1].content).toBe(`m${overflow - 1}`);
@@ -67,10 +68,23 @@ describe("case messages", () => {
 
   it("isolates messages per case", () => {
     const platform = createPlatformDemo();
-    appendCaseMessages(platform, "case_1", [message("左膝")]);
-    appendCaseMessages(platform, "case_2", [message("右膝")]);
+    appendCaseMessages(platform, "user_1", "case_1", [message("左膝")]);
+    appendCaseMessages(platform, "user_1", "case_2", [message("右膝")]);
 
-    expect(listCaseMessages(platform, "case_1").map((entry) => entry.content)).toEqual(["左膝"]);
-    expect(listCaseMessages(platform, "case_2").map((entry) => entry.content)).toEqual(["右膝"]);
+    expect(listCaseMessages(platform, "user_1", "case_1").map((entry) => entry.content)).toEqual(["左膝"]);
+    expect(listCaseMessages(platform, "user_1", "case_2").map((entry) => entry.content)).toEqual(["右膝"]);
+  });
+
+  it("isolates messages per user even when the caseId collides", () => {
+    const platform = createPlatformDemo();
+    appendCaseMessages(platform, "user_a", "case_1", [message("A 的私密病史")]);
+    appendCaseMessages(platform, "user_b", "case_1", [message("B 的私密病史")]);
+
+    const userAMessages = listCaseMessages(platform, "user_a", "case_1");
+    const userBMessages = listCaseMessages(platform, "user_b", "case_1");
+
+    expect(userAMessages.map((entry) => entry.content)).toEqual(["A 的私密病史"]);
+    expect(userBMessages.map((entry) => entry.content)).toEqual(["B 的私密病史"]);
+    expect(userAMessages).not.toEqual(userBMessages);
   });
 });
