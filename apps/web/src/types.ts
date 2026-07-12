@@ -149,6 +149,7 @@ export type PatientCase = {
   createdAt: string;
   status: string;
   messages: ChatMessage[];
+  messagesLoaded?: boolean;
   plan: CasePlan | null;
 };
 

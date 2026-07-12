@@ -11,6 +11,7 @@ export function hydrateCasesFromMemory(memory: UserMemory, existingCases: Patien
     return {
       ...memoryCase,
       messages: existingCase?.messages ?? [],
+      messagesLoaded: existingCase?.messagesLoaded ?? false,
       plan: existingCase?.plan ?? planForCase(memory, memoryCase.id),
     };
   });

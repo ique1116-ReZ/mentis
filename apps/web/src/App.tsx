@@ -127,6 +127,13 @@ export function App() {
     }
   }, [session?.token, session?.user.role, selectedClinicianId]);
 
+  useEffect(() => {
+    const current = cases.find((patientCase) => patientCase.id === activeCaseId);
+    if (current && !current.messagesLoaded) {
+      void loadCaseMessages(current.id);
+    }
+  }, [activeCaseId, cases]);
+
   if (session?.user.role === "clinician") {
     return <ClinicianDashboard session={session} onLogout={logout} />;
   }
@@ -173,6 +180,9 @@ export function App() {
           content: `${displayName}，请直接输入你最想解决的不适。`,
         },
       ],
+      // 新建病例本地已有欢迎语，且尚未持久化到消息接口；标记为已加载，
+      // 避免下面的懒加载 effect 用空数组把这条欢迎语覆盖掉。
+      messagesLoaded: true,
     };
 
     setCases((currentCases) => [newCase, ...currentCases]);
@@ -186,6 +196,9 @@ export function App() {
     setActiveCaseId(patientCase.id);
     setActivePage("home");
     setInput("");
+    if (!patientCase.messagesLoaded) {
+      void loadCaseMessages(patientCase.id);
+    }
     syncViewportAfterChatChange();
   }
 
@@ -323,6 +336,7 @@ export function App() {
     setInput("");
     setIsSending(true);
     syncViewportAfterChatChange();
+    void persistCaseMessages(sendingCase.id, [{ role: "user", content }]);
     if (shouldCaptureComplaint) {
       void rememberCaseForCurrentUser({ ...caseAfterUserInput, messages: nextMessages });
     }
@@ -361,6 +375,7 @@ export function App() {
         planPatch: data.planPatch,
       };
       updateCaseMessages(sendingCase.id, [...nextMessages, assistantMessage]);
+      void persistCaseMessages(sendingCase.id, [assistantMessage]);
       if (data.planPatch) {
         applyPlanPatch(sendingCase.id, data.planPatch);
         if (isCompletePlanPatch(data.planPatch)) {
@@ -691,6 +706,47 @@ export function App() {
       setActiveConsultationId(nextConsultation.id);
       await refreshConsultation(nextConsultation.id);
       startConsultationStream(nextConsultation.id);
+    }
+  }
+
+  async function loadCaseMessages(caseId: string) {
+    if (!session) {
+      return;
+    }
+    try {
+      const response = await fetch(
+        `${API_BASE}/v1/users/${encodeURIComponent(session.user.id)}/cases/${encodeURIComponent(caseId)}/messages`,
+        { headers: { Authorization: `Bearer ${session.token}` } },
+      );
+      if (!response.ok) {
+        return;
+      }
+      const messages = (await response.json()) as ChatMessage[];
+      setCases((currentCases) =>
+        currentCases.map((patientCase) =>
+          patientCase.id === caseId ? { ...patientCase, messages, messagesLoaded: true } : patientCase,
+        ),
+      );
+    } catch {
+      // 拉取失败就保持未加载状态，下次进入病例会重试
+    }
+  }
+
+  async function persistCaseMessages(caseId: string, messages: ChatMessage[]) {
+    if (!session || messages.length === 0) {
+      return;
+    }
+    try {
+      await fetch(
+        `${API_BASE}/v1/users/${encodeURIComponent(session.user.id)}/cases/${encodeURIComponent(caseId)}/messages`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ messages }),
+        },
+      );
+    } catch {
+      // 持久化失败不阻断对话
     }
   }
 
