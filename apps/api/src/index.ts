@@ -7,4 +7,6 @@ export * from "./auth.js";
 export * from "./consultations.js";
 export * from "./assessments.js";
 export * from "./rag.js";
+export * from "./text-scoring.js";
+export * from "./action-retrieval.js";
 export * from "./chat.js";
