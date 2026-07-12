@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { dateKey } from "@mentis/domain";
+import { completionPercentForDate, dateKey, doneKeysForDate, planItemKey } from "@mentis/domain";
 import rezLogo from "./assets/rez-logo.png";
 import { loadStoredSession, storeSession, validateStoredSession } from "./authSession";
 import { API_BASE } from "./apiBase";
@@ -73,10 +73,19 @@ export function App() {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const consultationStreamRef = useRef<EventSource | null>(null);
   const loadingCaseMessageIdsRef = useRef<Set<string>>(new Set());
+  const planToggleRequestIdRef = useRef(0);
   const activeCase = cases.find((patientCase) => patientCase.id === activeCaseId) ?? null;
   const selectedCategory = activeCase ? consultCategories.find((category) => category.id === activeCase.categoryId) ?? null : null;
   const messages = activeCase?.messages ?? [];
   const hasPrimaryComplaint = activeCase ? !isComplaintPending(activeCase) : false;
+  // 与"我的计划"页同源：都从 displayTrainingPlans(session.memory.trainingPlans, cases) 里按 caseId 取计划，
+  // 再用 domain 的 completions-by-date helper 算今日完成度，避免首页面板和计划页各算一套、互相不同步。
+  const todayKey = dateKey(new Date());
+  const activeCasePlan = activeCase
+    ? displayTrainingPlans(session?.memory.trainingPlans ?? [], cases).find((plan) => plan.caseId === activeCase.id) ?? null
+    : null;
+  const todayDoneKeys = activeCasePlan ? doneKeysForDate(activeCasePlan, todayKey) : new Set<string>();
+  const todayCompletionPercent = activeCasePlan ? completionPercentForDate(activeCasePlan, todayKey) : 0;
   const displayName = session?.user.displayName ?? "张运动";
   const profile = session?.user.profile;
 
@@ -884,35 +893,50 @@ export function App() {
     if (!session) {
       return;
     }
-    const previousMemory = session.memory;
-
+    // 请求计数器：每次打勾都会推进它，异步响应回来时先比对是不是还是"最新一次"。
+    // 用户可能连续快速打勾 A、B 两个动作，两个请求都在飞行中，网络抖动可能让 A 的响应
+    // 晚于 B 落地——这时 A 的响应（不含 B 的勾选）是过期快照，不能用它整体覆盖 memory，
+    // 否则会把 B 已经打上的勾从界面上冲掉。同理，失败回滚也不能用调用发起时捕获的
+    // session 快照——那个快照可能比后来的乐观更新还旧。所以下面全程只用函数式
+    // setSession(prev => ...)，从不 spread 闭包捕获的 session。
+    const requestId = ++planToggleRequestIdRef.current;
+    const userId = session.user.id;
+    const token = session.token;
     const today = dateKey(new Date());
-    const optimisticPlans = session.memory.trainingPlans.map((plan) => {
-      if (plan.id !== planId) {
-        return plan;
+
+    setSession((prev) => {
+      if (!prev) {
+        return prev;
       }
-      const completions = [...(plan.completions ?? [])];
-      const index = completions.findIndex((entry) => entry.date === today);
-      const existing = index >= 0 ? completions[index] : { date: today, doneKeys: [] };
-      const doneKeys = done
-        ? Array.from(new Set([...existing.doneKeys, key]))
-        : existing.doneKeys.filter((candidate) => candidate !== key);
-      const entry = { date: today, doneKeys };
-      if (index >= 0) {
-        completions[index] = entry;
-      } else {
-        completions.push(entry);
-      }
-      return { ...plan, completions };
+      const optimisticPlans = prev.memory.trainingPlans.map((plan) => {
+        if (plan.id !== planId) {
+          return plan;
+        }
+        const completions = [...(plan.completions ?? [])];
+        const index = completions.findIndex((entry) => entry.date === today);
+        const existing = index >= 0 ? completions[index] : { date: today, doneKeys: [] };
+        const doneKeys = done
+          ? Array.from(new Set([...existing.doneKeys, key]))
+          : existing.doneKeys.filter((candidate) => candidate !== key);
+        const entry = { date: today, doneKeys };
+        if (index >= 0) {
+          completions[index] = entry;
+        } else {
+          completions.push(entry);
+        }
+        return { ...plan, completions };
+      });
+      const nextSession = { ...prev, memory: { ...prev.memory, trainingPlans: optimisticPlans } };
+      storeSession(nextSession);
+      return nextSession;
     });
-    setSession({ ...session, memory: { ...session.memory, trainingPlans: optimisticPlans } });
 
     try {
       const response = await fetch(
-        `${API_BASE}/v1/users/${encodeURIComponent(session.user.id)}/memory/training-plans/${encodeURIComponent(planId)}/completions`,
+        `${API_BASE}/v1/users/${encodeURIComponent(userId)}/memory/training-plans/${encodeURIComponent(planId)}/completions`,
         {
           method: "POST",
-          headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" },
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
           body: JSON.stringify({ key, done }),
         },
       );
@@ -920,9 +944,26 @@ export function App() {
         throw new Error(`completion_failed_${response.status}`);
       }
       const memory = (await response.json()) as UserMemory;
-      setSession({ ...session, memory });
+      if (requestId !== planToggleRequestIdRef.current) {
+        // 期间已经又发起了更新的打勾请求，那次请求自己的乐观状态/响应更能代表当前
+        // 状态，这里就不要用这份过期响应去覆盖它了。
+        return;
+      }
+      setSession((prev) => {
+        if (!prev) {
+          return prev;
+        }
+        const nextSession = { ...prev, memory };
+        storeSession(nextSession);
+        return nextSession;
+      });
     } catch {
-      setSession({ ...session, memory: previousMemory });
+      if (requestId !== planToggleRequestIdRef.current) {
+        return;
+      }
+      // 不用捕获的快照回滚（可能已经过期），改为向服务端重新拉取权威状态。
+      // refreshMemoryForCurrentUser 失败时本身会安全地什么都不做。
+      await refreshMemoryForCurrentUser();
     }
   }
 
@@ -1107,21 +1148,21 @@ export function App() {
         <aside className="right-column">
           <Panel
             title="今日计划"
-            action={activeCase?.plan ? "查看完整计划" : undefined}
-            onAction={activeCase?.plan ? () => navigatePage("plans") : undefined}
+            action={activeCasePlan ? "查看完整计划" : undefined}
+            onAction={activeCasePlan ? () => navigatePage("plans") : undefined}
           >
-            {activeCase?.plan ? (
+            {activeCasePlan ? (
               <div className="today-plan">
                 <div className="stage-box">
-                  <strong>{activeCase.plan.title} · {activeCase.plan.dayLabel}</strong>
+                  <strong>{activeCasePlan.title} · {activeCasePlan.dayLabel}</strong>
                   <div className="progress-line amber">
-                    <span style={{ width: `${activeCase.plan.completionPercent}%` }} />
+                    <span style={{ width: `${todayCompletionPercent}%` }} />
                   </div>
-                  <span>完成度 {activeCase.plan.completionPercent}%</span>
+                  <span>完成度 {todayCompletionPercent}%</span>
                 </div>
                 <ol className="plan-list">
-                  {activeCase.plan.items.map((item, index) => (
-                    <li className={item.state} key={item.title}>
+                  {activeCasePlan.items.map((item, index) => (
+                    <li className={todayDoneKeys.has(planItemKey(item)) ? "done" : "todo"} key={planItemKey(item)}>
                       <span>{index + 1}</span>
                       <div>
                         <strong>{item.title}</strong>
