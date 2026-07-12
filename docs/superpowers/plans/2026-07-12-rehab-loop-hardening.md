@@ -29,12 +29,11 @@
 - `apps/api/test/action-retrieval.test.ts`
 - `apps/api/test/recommended-actions.test.ts`
 - `apps/api/test/plan-completions.test.ts`
-- `apps/web/src/planProgress.ts` — 今日完成度计算（纯函数，好测）
-- `apps/web/src/planProgress.test.ts`
+- `packages/domain/test/plan-completion.test.ts` — 打卡纯逻辑的单测
 - `scripts/purge-fitness-library.mjs` — 生产数据迁移脚本（Task 14）
 
 **修改：**
-- `packages/domain/src/index.ts` — `ActionLibraryItem` 扩展字段
+- `packages/domain/src/index.ts` — `ActionLibraryItem` 扩展字段（Task 4）；打卡的共享纯逻辑（Task 9）。打卡计算前后端都要用，写两份必然漂移，所以放共享包。
 - `apps/api/src/types.ts` — `PlatformDemo.caseMessages`、`StoredCaseMessage`、`ChatRecommendedAction` 扩展、`MemoryTrainingPlan` 对齐 + `completions`
 - `apps/api/src/storage.ts` — 持久化白名单加 `caseMessages`
 - `apps/api/src/platform.ts` — 初始化 `caseMessages`；换掉种子动作库
@@ -1658,34 +1657,154 @@ git commit -m "feat(web): add all recommended actions to today's plan at once"
 
 ## 阶段 C：计划打卡
 
-### Task 9: 后端打卡记录与依从性摘要
+### Task 9: 打卡的共享领域逻辑 + 后端记录与依从性摘要
 
 **Files:**
+- Modify: `packages/domain/src/index.ts`（打卡的纯逻辑，前后端共享）
+- Create: `packages/domain/test/plan-completion.test.ts`
 - Modify: `apps/api/src/types.ts:129-149`（`MemoryTrainingPlan` 对齐 item 结构 + 加 `completions`）
 - Modify: `apps/api/src/memory.ts`（新增打卡函数；`summarizeActivePlans` 带上依从性）
 - Test: `apps/api/test/plan-completions.test.ts`
 
+**为什么放 domain**：完成度计算前端（渲染进度条和勾选框）和后端（存 `completionPercent`、算依从性）都要用。`@mentis/domain` 就是为「前后端共享的纯类型 + 领域规则」存在的。写两份必然会在改打卡规则时漂移。
+
+用**结构化类型** `PlanCheckable`，这样 api 的 `MemoryTrainingPlan` 和 web 的 `MemoryTrainingPlan` 不用互相 import 就都能传进来。
+
 **Interfaces:**
 - Consumes: `getUserMemory`（`memory.ts:25`）、`notFound`（`helpers.ts`）
-- Produces:
-  - `interface MemoryTrainingPlanItem { actionId?: string; title: string; meta: string; state: "done" | "todo"; phase?: string; instructions?: string[]; contraindications?: string[]; progressionCriteria?: string[] }`
+- Produces（`packages/domain/src/index.ts`，前后端共享）：
   - `interface PlanCompletion { date: string; doneKeys: string[] }`
+  - `interface PlanCheckItem { actionId?: string; title: string }`
+  - `interface PlanCheckable { items: PlanCheckItem[]; completions?: PlanCompletion[] }`
   - `const MAX_PLAN_COMPLETION_DAYS = 30`
-  - `planItemKey(item: MemoryTrainingPlanItem): string` → `actionId ?? title`
+  - `dateKey(date: Date): string` → `YYYY-MM-DD`
+  - `planItemKey(item: PlanCheckItem): string` → `actionId ?? title`
+  - `doneKeysForDate(plan: PlanCheckable, date: string): Set<string>`
+  - `completionPercentForDate(plan: PlanCheckable, date: string): number`
+- Produces（`apps/api`，服务端专有）：
+  - `interface MemoryTrainingPlanItem { actionId?: string; title: string; meta: string; state: "done" | "todo"; phase?: string; instructions?: string[]; contraindications?: string[]; progressionCriteria?: string[] }`
   - `recordPlanCompletion(platform: PlatformDemo, userId: string, planId: string, key: string, done: boolean, today?: Date): UserMemory`
-  - `completionPercentForDate(plan: MemoryTrainingPlan, date: string): number`
   - `summarizeAdherence(plans: MemoryTrainingPlan[], today?: Date): string` → 形如 `最近 7 天完成训练 3 天`
 
 **注意**：现在 api 的 `MemoryTrainingPlan.items` 是 `Array<{ title; meta; state }>`，比前端 `CasePlanItem` 窄（缺 `actionId`）。前端一直在发更宽的对象，运行时留存了，只是类型没对上。打卡要用 `actionId` 做 key，所以这一步必须把类型补齐。
 
-- [ ] **Step 1: 写失败的测试**
+- [ ] **Step 1: 写 domain 的失败测试**
+
+创建 `packages/domain/test/plan-completion.test.ts`：
+
+```ts
+import { describe, expect, it } from "vitest";
+import { completionPercentForDate, dateKey, doneKeysForDate, planItemKey } from "../src/index";
+import type { PlanCheckable } from "../src/index";
+
+const plan: PlanCheckable = {
+  items: [
+    { actionId: "action_quad_iso", title: "股四头肌等长收缩" },
+    { title: "坐姿腘绳肌拉伸" },
+  ],
+  completions: [{ date: "2026-07-12", doneKeys: ["action_quad_iso"] }],
+};
+
+describe("plan completion", () => {
+  it("formats a date as YYYY-MM-DD", () => {
+    expect(dateKey(new Date("2026-07-12T10:00:00.000Z"))).toBe("2026-07-12");
+  });
+
+  it("keys items by actionId, falling back to title", () => {
+    expect(planItemKey(plan.items[0])).toBe("action_quad_iso");
+    expect(planItemKey(plan.items[1])).toBe("坐姿腘绳肌拉伸");
+  });
+
+  it("reads back the keys completed on a given day", () => {
+    expect(doneKeysForDate(plan, "2026-07-12").has("action_quad_iso")).toBe(true);
+    expect(doneKeysForDate(plan, "2026-07-12").has("坐姿腘绳肌拉伸")).toBe(false);
+  });
+
+  it("resets across days — yesterday's completions do not count today", () => {
+    expect(completionPercentForDate(plan, "2026-07-12")).toBe(50);
+    expect(completionPercentForDate(plan, "2026-07-13")).toBe(0);
+    expect(doneKeysForDate(plan, "2026-07-13").size).toBe(0);
+  });
+
+  it("ignores done keys that no longer match any item in the plan", () => {
+    const stale: PlanCheckable = {
+      items: [{ actionId: "action_quad_iso", title: "股四头肌等长收缩" }],
+      completions: [{ date: "2026-07-12", doneKeys: ["action_quad_iso", "action_removed"] }],
+    };
+    expect(completionPercentForDate(stale, "2026-07-12")).toBe(100);
+  });
+
+  it("reports zero for an empty plan rather than dividing by zero", () => {
+    expect(completionPercentForDate({ items: [], completions: [] }, "2026-07-12")).toBe(0);
+  });
+});
+```
+
+- [ ] **Step 2: 跑 domain 测试确认失败**
+
+Run: `npm test -w @mentis/domain`
+Expected: FAIL — `planItemKey` 等未导出。
+
+- [ ] **Step 3: 实现 domain 的打卡逻辑**
+
+`packages/domain/src/index.ts` 追加：
+
+```ts
+export interface PlanCompletion {
+  /** YYYY-MM-DD，由服务端日期生成 */
+  date: string;
+  doneKeys: string[];
+}
+
+/** 结构化类型：api 和 web 各自的 MemoryTrainingPlan 都满足它，不需要互相 import。 */
+export interface PlanCheckItem {
+  actionId?: string;
+  title: string;
+}
+
+export interface PlanCheckable {
+  items: PlanCheckItem[];
+  completions?: PlanCompletion[];
+}
+
+export const MAX_PLAN_COMPLETION_DAYS = 30;
+
+export function dateKey(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+export function planItemKey(item: PlanCheckItem): string {
+  return item.actionId ?? item.title;
+}
+
+export function doneKeysForDate(plan: PlanCheckable, date: string): Set<string> {
+  const entry = plan.completions?.find((completion) => completion.date === date);
+  return new Set(entry?.doneKeys ?? []);
+}
+
+export function completionPercentForDate(plan: PlanCheckable, date: string): number {
+  if (plan.items.length === 0) {
+    return 0;
+  }
+  const doneKeys = doneKeysForDate(plan, date);
+  const doneCount = plan.items.filter((item) => doneKeys.has(planItemKey(item))).length;
+  return Math.round((doneCount / plan.items.length) * 100);
+}
+```
+
+- [ ] **Step 4: 跑 domain 测试确认通过，并 build**
+
+Run: `npm test -w @mentis/domain && npm run build -w @mentis/domain`
+Expected: PASS + build 成功（api/web 靠 `dist` 解析这个包，不 build 后面会找不到符号）。
+
+- [ ] **Step 5: 写 api 的失败测试**
 
 创建 `apps/api/test/plan-completions.test.ts`：
 
 ```ts
 import { describe, expect, it } from "vitest";
+import { completionPercentForDate } from "@mentis/domain";
 import {
-  completionPercentForDate,
   createPlatformDemo,
   recordPlanCompletion,
   rememberCase,
@@ -1804,14 +1923,14 @@ describe("plan completions", () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [ ] **Step 6: 跑 api 测试确认失败**
 
 Run: `npm test -w @mentis/api -- plan-completions`
 Expected: FAIL — `recordPlanCompletion` 不存在。
 
-- [ ] **Step 3: 改类型**
+- [ ] **Step 7: 改 api 类型**
 
-`apps/api/src/types.ts:129-145` 的 `MemoryTrainingPlan` 替换为：
+`apps/api/src/types.ts:129-145` 的 `MemoryTrainingPlan` 替换为（`PlanCompletion` 现在从 `@mentis/domain` import，不要在 api 里再定义一份）：
 
 ```ts
 export interface MemoryTrainingPlanItem {
@@ -1823,12 +1942,6 @@ export interface MemoryTrainingPlanItem {
   instructions?: string[];
   contraindications?: string[];
   progressionCriteria?: string[];
-}
-
-export interface PlanCompletion {
-  /** YYYY-MM-DD，服务端日期，不接受客户端传入 */
-  date: string;
-  doneKeys: string[];
 }
 
 export interface MemoryTrainingPlan {
@@ -1851,21 +1964,13 @@ export interface MemoryTrainingPlan {
 }
 ```
 
-- [ ] **Step 4: 实现打卡函数**
+`PlanCompletion` 从 `@mentis/domain` import 进 `types.ts` 并 re-export（`types.ts` 顶部已有从 domain 的 import，跟着加）。
 
-`apps/api/src/memory.ts` 追加：
+- [ ] **Step 8: 实现服务端打卡函数**
+
+`apps/api/src/memory.ts` 追加（纯计算全部复用 domain，这里只做「改 platform 状态」这件服务端专有的事）：
 
 ```ts
-export const MAX_PLAN_COMPLETION_DAYS = 30;
-
-export function planItemKey(item: MemoryTrainingPlanItem): string {
-  return item.actionId ?? item.title;
-}
-
-function toDateKey(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
 export function recordPlanCompletion(
   platform: PlatformDemo,
   userId: string,
@@ -1880,7 +1985,7 @@ export function recordPlanCompletion(
     throw notFound(`Unknown training plan: ${planId}`);
   }
 
-  const date = toDateKey(today);
+  const date = dateKey(today);
   const completions = [...(plan.completions ?? [])];
   const index = completions.findIndex((entry) => entry.date === date);
   const existing = index >= 0 ? completions[index] : { date, doneKeys: [] };
@@ -1906,23 +2011,10 @@ export function recordPlanCompletion(
   return memory;
 }
 
-export function completionPercentForDate(plan: MemoryTrainingPlan, date: string): number {
-  if (plan.items.length === 0) {
-    return 0;
-  }
-  const entry = plan.completions?.find((candidate) => candidate.date === date);
-  if (!entry) {
-    return 0;
-  }
-  const validKeys = new Set(plan.items.map(planItemKey));
-  const doneCount = entry.doneKeys.filter((key) => validKeys.has(key)).length;
-  return Math.round((doneCount / plan.items.length) * 100);
-}
-
 export function summarizeAdherence(plans: MemoryTrainingPlan[], today: Date = new Date()): string {
   const windowDays = 7;
   const cutoff = new Date(today.getTime() - (windowDays - 1) * 24 * 60 * 60 * 1000);
-  const cutoffKey = toDateKey(cutoff);
+  const cutoffKey = dateKey(cutoff);
   const activeDates = new Set<string>();
 
   for (const plan of plans) {
@@ -1936,9 +2028,13 @@ export function summarizeAdherence(plans: MemoryTrainingPlan[], today: Date = ne
 }
 ```
 
-需要的 import：`MemoryTrainingPlanItem`、`MemoryTrainingPlan`、`PlanCompletion` 从 `./types.js`。
+需要的 import：
+- 从 `@mentis/domain`：`completionPercentForDate`、`dateKey`、`MAX_PLAN_COMPLETION_DAYS`
+- 从 `./types.js`：`MemoryTrainingPlan`
 
-- [ ] **Step 5: 把依从性喂进 AI 记忆**
+**不要**在 `memory.ts` 里重新实现 `planItemKey` / `completionPercentForDate` / 日期格式化——它们已经在 domain 里，重复实现是这次评审明确要避免的问题。
+
+- [ ] **Step 9: 把依从性喂进 AI 记忆**
 
 `apps/api/src/memory.ts:110-114` 的 `summarizeActivePlans` 改为把依从性拼进去：
 
@@ -1953,19 +2049,20 @@ function summarizeActivePlans(plans: MemoryTrainingPlan[]): string {
 
 这样 `buildUserMemoryContext`（`chat.ts:181`）每轮注入的「当前计划」里就带上了「最近 7 天完成训练 2 天」，AI 问诊时能看到真实依从性，而不是假设用户完美执行。
 
-- [ ] **Step 6: 跑测试**
+- [ ] **Step 10: 跑测试**
 
 Run: `npm test -w @mentis/api -- plan-completions`
 Expected: PASS，7 个用例全绿。
 
-Run: `npm test -w @mentis/api`
-Expected: PASS。
+Run: `npm test`
+Expected: PASS（domain / api / web 三个包全绿）。
 
-- [ ] **Step 7: 提交**
+- [ ] **Step 11: 提交**
 
 ```bash
-git add apps/api/src/types.ts apps/api/src/memory.ts apps/api/test/plan-completions.test.ts
-git commit -m "feat(api): track daily plan completions and feed adherence to the model"
+git add packages/domain/src/index.ts packages/domain/test/plan-completion.test.ts \
+        apps/api/src/types.ts apps/api/src/memory.ts apps/api/test/plan-completions.test.ts
+git commit -m "feat: track daily plan completions and feed adherence to the model"
 ```
 
 ---
@@ -2037,111 +2134,35 @@ git commit -m "feat(api): add plan completion route"
 ### Task 11: 计划页打勾交互
 
 **Files:**
-- Create: `apps/web/src/planProgress.ts`
-- Create: `apps/web/src/planProgress.test.ts`
 - Modify: `apps/web/src/types.ts`（`MemoryTrainingPlan` 加 `completions?`；`CasePlanItem` 已有 `actionId`，无需改）
 - Modify: `apps/web/src/components/PlansPage.tsx:66-90`（勾选框替换死文本）
 - Modify: `apps/web/src/App.tsx`（`togglePlanItem` + 乐观更新 + 失败回滚）
 - Modify: `apps/web/src/styles.css`
 
 **Interfaces:**
-- Consumes: Task 10 的路由；`MemoryTrainingPlan`（带 `completions`）
-- Produces:
-  - `todayKey(now?: Date): string` → `YYYY-MM-DD`
-  - `planItemKey(item: CasePlanItem): string` → `actionId ?? title`
-  - `doneKeysForToday(plan: MemoryTrainingPlan, today: string): Set<string>`
-  - `completionPercentToday(plan: MemoryTrainingPlan, today: string): number`
-  - `PlansPage` 新增 prop：`onToggleItem: (planId: string, key: string, done: boolean) => void`
+- Consumes:
+  - Task 10 的路由
+  - **从 `@mentis/domain`**（Task 9 已实现并测过，**不要在 web 里重写一遍**）：`dateKey(date: Date): string`、`planItemKey(item)`、`doneKeysForDate(plan, date)`、`completionPercentForDate(plan, date)`。web 的 `MemoryTrainingPlan` 结构上满足 domain 的 `PlanCheckable`，直接传即可。
+  - 「今天」= `dateKey(new Date())`，不需要额外包一层 `todayKey`。
+- Produces: `PlansPage` 新增 prop `onToggleItem: (planId: string, key: string, done: boolean) => void`
 
-- [ ] **Step 1: 写失败的测试**
+本任务没有新的纯逻辑要写，因此不新增 web 侧的计算模块和它的单测——打卡计算的测试已在 `packages/domain/test/plan-completion.test.ts`（Task 9）。本任务靠类型检查 + 端到端验证收口。
 
-创建 `apps/web/src/planProgress.test.ts`：
+- [ ] **Step 1: 前端类型对齐后端**
 
-```ts
-import { describe, expect, it } from "vitest";
-import { completionPercentToday, doneKeysForToday, planItemKey, todayKey } from "./planProgress";
-import type { MemoryTrainingPlan } from "./types";
-
-const plan: MemoryTrainingPlan = {
-  id: "plan_1",
-  caseId: "case_1",
-  categoryId: "knee",
-  title: "膝盖康复训练计划",
-  status: "active",
-  dayLabel: "今日训练",
-  completionPercent: 0,
-  items: [
-    { actionId: "action_quad_iso", title: "股四头肌等长收缩", meta: "3 组 x 30 秒", state: "todo" },
-    { title: "坐姿腘绳肌拉伸", meta: "3 组 x 30 秒", state: "todo" },
-  ],
-  completions: [{ date: "2026-07-12", doneKeys: ["action_quad_iso"] }],
-  stage: { name: "镇痛与激活", progressLabel: "第 1 天", progressPercent: 0, goals: [] },
-  updatedAt: "2026-07-12T10:00:00.000Z",
-};
-
-describe("plan progress", () => {
-  it("formats today as YYYY-MM-DD", () => {
-    expect(todayKey(new Date("2026-07-12T10:00:00.000Z"))).toBe("2026-07-12");
-  });
-
-  it("keys items by actionId, falling back to title", () => {
-    expect(planItemKey(plan.items[0])).toBe("action_quad_iso");
-    expect(planItemKey(plan.items[1])).toBe("坐姿腘绳肌拉伸");
-  });
-
-  it("reads back the keys completed today", () => {
-    expect(doneKeysForToday(plan, "2026-07-12").has("action_quad_iso")).toBe(true);
-    expect(doneKeysForToday(plan, "2026-07-12").has("坐姿腘绳肌拉伸")).toBe(false);
-  });
-
-  it("resets across days — yesterday's completions do not count today", () => {
-    expect(completionPercentToday(plan, "2026-07-12")).toBe(50);
-    expect(completionPercentToday(plan, "2026-07-13")).toBe(0);
-    expect(doneKeysForToday(plan, "2026-07-13").size).toBe(0);
-  });
-});
-```
-
-- [ ] **Step 2: 跑测试确认失败**
-
-Run: `npm test -w @mentis/web -- planProgress`
-Expected: FAIL — 模块不存在。
-
-- [ ] **Step 3: 实现 planProgress.ts**
-
-```ts
-import type { CasePlanItem, MemoryTrainingPlan } from "./types";
-
-export function todayKey(now: Date = new Date()): string {
-  return now.toISOString().slice(0, 10);
-}
-
-export function planItemKey(item: CasePlanItem): string {
-  return item.actionId ?? item.title;
-}
-
-export function doneKeysForToday(plan: MemoryTrainingPlan, today: string): Set<string> {
-  const entry = plan.completions?.find((completion) => completion.date === today);
-  return new Set(entry?.doneKeys ?? []);
-}
-
-export function completionPercentToday(plan: MemoryTrainingPlan, today: string): number {
-  if (plan.items.length === 0) {
-    return 0;
-  }
-  const doneKeys = doneKeysForToday(plan, today);
-  const doneCount = plan.items.filter((item) => doneKeys.has(planItemKey(item))).length;
-  return Math.round((doneCount / plan.items.length) * 100);
-}
-```
-
-`apps/web/src/types.ts` 的 `MemoryTrainingPlan` 加一行（和后端对齐）：
+`apps/web/src/types.ts` 的 `MemoryTrainingPlan` 加一行：
 
 ```ts
   completions?: { date: string; doneKeys: string[] }[];
 ```
 
-- [ ] **Step 4: App.tsx 里加 toggle（乐观更新 + 失败回滚）**
+打卡的计算逻辑全部从 `@mentis/domain` import（Task 9 已实现并有单测）：
+
+```ts
+import { completionPercentForDate, dateKey, doneKeysForDate, planItemKey } from "@mentis/domain";
+```
+
+- [ ] **Step 2: App.tsx 里加 toggle（乐观更新 + 失败回滚）**
 
 ```ts
   async function togglePlanItem(planId: string, key: string, done: boolean) {
@@ -2150,7 +2171,7 @@ export function completionPercentToday(plan: MemoryTrainingPlan, today: string):
     }
     const previousMemory = session.memory;
 
-    const today = todayKey();
+    const today = dateKey(new Date());
     const optimisticPlans = session.memory.trainingPlans.map((plan) => {
       if (plan.id !== planId) {
         return plan;
@@ -2191,13 +2212,13 @@ export function completionPercentToday(plan: MemoryTrainingPlan, today: string):
   }
 ```
 
-把 `onToggleItem={togglePlanItem}` 传给 `<PlansPage ... />`。`todayKey` 从 `./planProgress` import。
+把 `onToggleItem={togglePlanItem}` 传给 `<PlansPage ... />`。`dateKey` 从 `@mentis/domain` import。
 
-- [ ] **Step 5: PlansPage 换成真勾选框**
+- [ ] **Step 3: PlansPage 换成真勾选框**
 
-`apps/web/src/components/PlansPage.tsx`：props 加 `onToggleItem`；顶部算 `const today = todayKey();`、`const doneKeys = activePlan ? doneKeysForToday(activePlan, today) : new Set<string>();`。
+`apps/web/src/components/PlansPage.tsx`：props 加 `onToggleItem`；顶部算 `const today = dateKey(new Date());`、`const doneKeys = activePlan ? doneKeysForDate(activePlan, today) : new Set<string>();`。
 
-进度条那行（`PlansPage.tsx:37-42`）的 `activePlan.completionPercent` 换成 `completionPercentToday(activePlan, today)`（两处：宽度和数字）。
+进度条那行（`PlansPage.tsx:37-42`）的 `activePlan.completionPercent` 换成 `completionPercentForDate(activePlan, today)`（两处：宽度和数字）。
 
 训练列表（`PlansPage.tsx:66-90`）里，把末尾的 `<em>{item.state === "done" ? "已完成" : "待完成"}</em>` 换成：
 
@@ -2214,7 +2235,7 @@ export function completionPercentToday(plan: MemoryTrainingPlan, today: string):
 
 标题栏（`PlansPage.tsx:63-65`）的日期从 `activePlan.updatedAt.slice(0, 10)` 改为 `today`——显示的是「今天」的训练，不是计划的更新时间。
 
-- [ ] **Step 6: 样式（扁平描边，无阴影）**
+- [ ] **Step 4: 样式（扁平描边，无阴影）**
 
 `apps/web/src/styles.css` 追加：
 
@@ -2243,22 +2264,22 @@ export function completionPercentToday(plan: MemoryTrainingPlan, today: string):
 }
 ```
 
-- [ ] **Step 7: 跑测试**
+- [ ] **Step 5: 跑测试与类型检查**
 
-Run: `npm test -w @mentis/web`
-Expected: PASS。
+Run: `npm test -w @mentis/web && npm run build -w @mentis/web`
+Expected: PASS。build 会做类型检查，能抓到 web 的 `MemoryTrainingPlan` 是否真的满足 domain 的 `PlanCheckable`。
 
-- [ ] **Step 8: 端到端验证跨天重置**
+- [ ] **Step 6: 端到端验证**
 
-起前后端，在「我的计划」勾几个动作，确认进度条动了；刷新页面，勾选状态还在（这证明它落了后端，不是本地 state）。
+起前后端，在「我的计划」勾几个动作，确认进度条跟着动；刷新页面，勾选状态还在（这证明它落了后端，不是本地 state）。
 
-跨天重置的验证不改系统时间——改用后端单测已覆盖（Task 9 的 `completionPercentForDate(plan, "2026-07-13") === 0`）+ 前端单测（Task 11 Step 1 的 `completionPercentToday(plan, "2026-07-13") === 0`）。手工只需确认「今天勾的，今天还在」。
+跨天重置不靠手工改系统时间验证——已由 `packages/domain/test/plan-completion.test.ts` 的 `completionPercentForDate(plan, "2026-07-13") === 0` 覆盖。手工只需确认「今天勾的，今天还在」。
 
-- [ ] **Step 9: 提交**
+- [ ] **Step 7: 提交**
 
 ```bash
-git add apps/web/src/planProgress.ts apps/web/src/planProgress.test.ts apps/web/src/types.ts \
-        apps/web/src/App.tsx apps/web/src/components/PlansPage.tsx apps/web/src/styles.css
+git add apps/web/src/types.ts apps/web/src/App.tsx \
+        apps/web/src/components/PlansPage.tsx apps/web/src/styles.css
 git commit -m "feat(web): check off plan items daily"
 ```
 
