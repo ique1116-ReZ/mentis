@@ -141,6 +141,7 @@ export function createPlatformDemo(): PlatformDemo {
     presence: {},
     demoSessions: {},
     auditEvents: [],
+    caseMessages: {},
   };
 }
 

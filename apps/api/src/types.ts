@@ -47,6 +47,7 @@ export interface PlatformDemo {
   presence: Record<string, ConsultationPresence>;
   demoSessions: Record<string, DemoSessionRecord>;
   auditEvents: AuditEvent[];
+  caseMessages: Record<string, StoredCaseMessage[]>;
 }
 
 export interface UserProfile {
@@ -246,6 +247,16 @@ export interface ChatMessage {
   content: string;
   question?: string;
   assessmentStep?: string;
+}
+
+export interface StoredCaseMessage {
+  role: ChatRole;
+  content: string;
+  question?: string;
+  assessmentStep?: string;
+  options?: ChatOption[];
+  recommendedActions?: ChatRecommendedAction[];
+  createdAt: string;
 }
 
 export interface ChatResult {

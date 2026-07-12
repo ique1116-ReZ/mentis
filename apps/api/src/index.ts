@@ -2,6 +2,7 @@ export * from "./types.js";
 export * from "./helpers.js";
 export * from "./platform.js";
 export * from "./memory.js";
+export * from "./case-messages.js";
 export * from "./auth.js";
 export * from "./consultations.js";
 export * from "./assessments.js";

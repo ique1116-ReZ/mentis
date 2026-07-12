@@ -10,6 +10,7 @@ const PERSISTABLE_KEYS = [
   "admins",
   "demoCredentials",
   "userMemories",
+  "caseMessages",
   "consultations",
   "caseAuthorizations",
   "consultationMessages",
@@ -82,6 +83,7 @@ export function hydrateFromDisk(platform: PlatformDemo): void {
   );
 
   platform.userMemories = { ...platform.userMemories, ...(persisted.userMemories ?? {}) };
+  platform.caseMessages = { ...platform.caseMessages, ...(persisted.caseMessages ?? {}) };
   platform.clinicianPresence = { ...platform.clinicianPresence, ...(persisted.clinicianPresence ?? {}) };
   platform.demoSessions = { ...platform.demoSessions, ...(persisted.demoSessions ?? {}) };
 
