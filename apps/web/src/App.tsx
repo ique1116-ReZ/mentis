@@ -813,11 +813,20 @@ export function App() {
       return;
     }
 
+    // 与 togglePlanItem 共用同一枚世代计数器（定义处见该函数顶部注释）。这里的
+    // await 期间用户完全可能打了一次新的勾，那次打勾会推进世代计数器并带着自己的
+    // 乐观更新/成功响应。等这份"记住病例"响应落地时如果世代已经变了，说明它反映的
+    // 是比新打勾更旧的服务端快照，绝不能用它整体覆盖 session，否则会把新打勾从
+    // 界面和 localStorage 里冲掉。
+    const requestId = ++memoryWriteGenerationRef.current;
+    const userId = session.user.id;
+    const token = session.token;
+
     try {
-      const response = await fetch(`${API_BASE}/v1/users/${encodeURIComponent(session.user.id)}/memory/cases`, {
+      const response = await fetch(`${API_BASE}/v1/users/${encodeURIComponent(userId)}/memory/cases`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${session.token}`,
+          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -832,9 +841,18 @@ export function App() {
 
       if (response.ok) {
         const memory = (await response.json()) as UserMemory;
-        const nextSession = { ...session, memory };
-        setSession(nextSession);
-        storeSession(nextSession);
+        if (requestId !== memoryWriteGenerationRef.current) {
+          // 期间已经有更新的打勾发生，丢弃这份过期快照，不写 session 也不写 storage。
+          return;
+        }
+        setSession((prev) => {
+          if (!prev) {
+            return prev;
+          }
+          const nextSession = { ...prev, memory };
+          storeSession(nextSession);
+          return nextSession;
+        });
       }
     } catch {
       // Local case state remains usable when the API is unavailable during early validation.
@@ -851,22 +869,36 @@ export function App() {
       setActiveCaseId(null);
     }
 
+    // 同上：与 togglePlanItem 共用世代计数器，防止删除病例的响应在打勾之后落地时
+    // 把打勾覆盖掉。
+    const requestId = ++memoryWriteGenerationRef.current;
+    const userId = session.user.id;
+    const token = session.token;
+
     try {
       const response = await fetch(
-        `${API_BASE}/v1/users/${encodeURIComponent(session.user.id)}/memory/cases/${encodeURIComponent(patientCase.id)}`,
+        `${API_BASE}/v1/users/${encodeURIComponent(userId)}/memory/cases/${encodeURIComponent(patientCase.id)}`,
         {
           method: "DELETE",
           headers: {
-            Authorization: `Bearer ${session.token}`,
+            Authorization: `Bearer ${token}`,
           },
         },
       );
 
       if (response.ok) {
         const memory = (await response.json()) as UserMemory;
-        const nextSession = { ...session, memory };
-        setSession(nextSession);
-        storeSession(nextSession);
+        if (requestId !== memoryWriteGenerationRef.current) {
+          return;
+        }
+        setSession((prev) => {
+          if (!prev) {
+            return prev;
+          }
+          const nextSession = { ...prev, memory };
+          storeSession(nextSession);
+          return nextSession;
+        });
       }
     } catch {
       // Local deletion remains useful when the API is unavailable during early validation.
@@ -878,13 +910,19 @@ export function App() {
       return;
     }
 
+    // 同上：与 togglePlanItem 共用世代计数器，防止"接受计划"的响应在打勾之后
+    // 落地时把打勾覆盖掉。
+    const requestId = ++memoryWriteGenerationRef.current;
+    const userId = session.user.id;
+    const token = session.token;
+
     try {
       const response = await fetch(
-        `${API_BASE}/v1/users/${encodeURIComponent(session.user.id)}/memory/training-plans`,
+        `${API_BASE}/v1/users/${encodeURIComponent(userId)}/memory/training-plans`,
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${session.token}`,
+            Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
@@ -899,9 +937,17 @@ export function App() {
 
       if (response.ok) {
         const memory = (await response.json()) as UserMemory;
-        const nextSession = { ...session, memory };
-        setSession(nextSession);
-        storeSession(nextSession);
+        if (requestId !== memoryWriteGenerationRef.current) {
+          return;
+        }
+        setSession((prev) => {
+          if (!prev) {
+            return prev;
+          }
+          const nextSession = { ...prev, memory };
+          storeSession(nextSession);
+          return nextSession;
+        });
         setCases((currentCases) => hydrateCasesFromMemory(memory, currentCases));
       }
     } catch {
