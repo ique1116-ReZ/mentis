@@ -188,10 +188,19 @@ export interface TrainingPlan {
   acceptedAt?: string;
 }
 
+export type RehabActionType = "stretch" | "strength" | "activation" | "mobility" | "balance";
+
 export interface ActionLibraryItem {
   id: string;
   title: string;
   bodyRegion: Assessment["bodyRegion"];
+  /** 多归属。腘绳肌拉伸同时属于 knee 和 hip——单归属正是动作推荐错配的根源。 */
+  bodyRegions?: Assessment["bodyRegion"][];
+  actionType?: RehabActionType;
+  targetMuscles?: string[];
+  /** seed = 人工审过；ai = 模型现场生成，未审、未录视频。 */
+  source?: "seed" | "ai";
+  videoUrl?: string;
   phase: string;
   defaultDosage: string;
   instructions: string[];

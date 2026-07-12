@@ -9,6 +9,7 @@ import type {
   ConsultationPaymentMode,
   ConsultationSession,
   PlatformActor,
+  RehabActionType,
   RehabPlan,
   TriageResult,
   TrainingPlan,
@@ -25,6 +26,7 @@ export type {
   ConsultationPaymentMode,
   ConsultationSession,
   PlatformActor,
+  RehabActionType,
   RehabPlan,
   TriageResult,
   TrainingPlan,
@@ -287,6 +289,8 @@ export interface ChatRecommendedAction {
   actionId?: string;
   title: string;
   bodyRegion: ActionLibraryItem["bodyRegion"];
+  actionType?: RehabActionType;
+  targetMuscles?: string[];
   phase: string;
   defaultDosage: string;
   instructions: string[];
