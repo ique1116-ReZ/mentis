@@ -13,6 +13,7 @@ import type {
   ConsultationSession,
   TrainingPlan,
 } from "@mentis/domain";
+import { actionBodyRegionForCategory } from "./action-retrieval.js";
 import { resolveFreshConsultationActor, requireVerifiedClinicianForConsultation } from "./auth.js";
 import {
   addDaysIso,
@@ -414,6 +415,34 @@ export function listActionLibrary(platform: PlatformDemo): ActionLibraryItem[] {
   return platform.actionLibrary;
 }
 
+function musclesOverlap(left: string[], right: string[]): boolean {
+  return left.some((leftMuscle) => {
+    const normalizedLeft = normalizeComparableText(leftMuscle);
+    return right.some((rightMuscle) => {
+      const normalizedRight = normalizeComparableText(rightMuscle);
+      return normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft);
+    });
+  });
+}
+
+/**
+ * 模型经常会为了满足「用库里的 actionId」而硬凑一个部位相近但完全不对的动作
+ * （正文说拉腘绳肌、actionId 指向股四头肌拉伸）。命中 id 后必须校验，
+ * 校验不了（库里那条没打标签）也一律视为不匹配——宁可用模型自己写的动作。
+ */
+export function isLibraryActionMatch(action: ChatRecommendedAction, item: ActionLibraryItem): boolean {
+  if (!item.actionType || !item.targetMuscles?.length) {
+    return false;
+  }
+  if (!action.actionType || !action.targetMuscles?.length) {
+    return false;
+  }
+  if (item.actionType !== action.actionType) {
+    return false;
+  }
+  return musclesOverlap(action.targetMuscles, item.targetMuscles);
+}
+
 export function resolveRecommendedActions(
   platform: PlatformDemo,
   actions: ChatRecommendedAction[] = [],
@@ -424,7 +453,7 @@ export function resolveRecommendedActions(
     const existingById = action.actionId
       ? platform.actionLibrary.find((candidate) => candidate.id === action.actionId)
       : undefined;
-    if (existingById) {
+    if (existingById && isLibraryActionMatch(action, existingById)) {
       return actionFromLibraryItem(existingById, action.reason);
     }
 
@@ -442,6 +471,10 @@ export function resolveRecommendedActions(
       id: generatedActionId(bodyRegion, action.title, action.defaultDosage),
       title: action.title,
       bodyRegion,
+      bodyRegions: [bodyRegion],
+      actionType: action.actionType,
+      targetMuscles: action.targetMuscles,
+      source: "ai",
       phase: action.phase,
       defaultDosage: action.defaultDosage,
       instructions: action.instructions,
@@ -450,7 +483,7 @@ export function resolveRecommendedActions(
       tags: mergeActionTags(["ai-generated", "rehab", bodyRegion, ...action.tags]),
     };
     const duplicateId = platform.actionLibrary.find((candidate) => candidate.id === generated.id);
-    const stored = duplicateId ? duplicateId : generated;
+    const stored = duplicateId ?? generated;
     if (!duplicateId) {
       platform.actionLibrary = [stored, ...platform.actionLibrary];
     }
@@ -458,28 +491,13 @@ export function resolveRecommendedActions(
   });
 }
 
-function actionBodyRegionForCategory(category?: RehabConsultCategory): ActionLibraryItem["bodyRegion"] {
-  switch (category) {
-    case "knee":
-      return "knee";
-    case "ankle":
-      return "ankle_foot";
-    case "shoulder":
-      return "shoulder";
-    case "lower_back":
-      return "spine";
-    case "hip":
-      return "hip";
-    default:
-      return "other";
-  }
-}
-
 function actionFromLibraryItem(action: ActionLibraryItem, reason?: string): ChatRecommendedAction {
   return {
     actionId: action.id,
     title: action.title,
     bodyRegion: action.bodyRegion,
+    actionType: action.actionType,
+    targetMuscles: action.targetMuscles,
     phase: action.phase,
     defaultDosage: action.defaultDosage,
     instructions: action.instructions,
