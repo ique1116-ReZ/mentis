@@ -35,6 +35,7 @@ import {
   sendConsultationMessage,
   QwenChatClient,
   resolveCorsOrigin,
+  type ActionLibraryItem,
   type RegistrationInput,
   type RehabConsultCategory,
 } from "../src/index";
@@ -1704,5 +1705,89 @@ describe("CORS origin resolution", () => {
     expect(resolveCorsOrigin("http://127.0.0.1:5174")).toBe("http://127.0.0.1:5174");
     expect(resolveCorsOrigin("http://localhost:5179")).toBe("http://localhost:5179");
     expect(resolveCorsOrigin("https://example.com")).toBe("http://127.0.0.1:5173");
+  });
+});
+
+describe("chat action library prompt", () => {
+  const library: ActionLibraryItem[] = [
+    {
+      id: "action_hamstring_stretch",
+      title: "坐姿腘绳肌拉伸",
+      bodyRegion: "knee",
+      bodyRegions: ["knee", "hip"],
+      actionType: "stretch",
+      targetMuscles: ["腘绳肌"],
+      source: "seed",
+      phase: "活动度与拉伸",
+      defaultDosage: "3 组 x 30 秒",
+      instructions: ["坐在椅子边缘"],
+      contraindications: ["疼痛加重立即停止"],
+      progressionCriteria: ["牵拉感可耐受"],
+      tags: ["膝盖"],
+    },
+  ];
+
+  it("injects action type and target muscles so the model knows what each action stretches", () => {
+    const prompt = buildChatSystemPrompt(
+      { category: "knee", actionLibrary: library },
+      [{ role: "user", content: "膝盖后方紧" }],
+    );
+    expect(prompt).toContain("action_hamstring_stretch");
+    expect(prompt).toContain("腘绳肌");
+    expect(prompt).toContain("stretch");
+  });
+
+  it("tells the model to invent a new action rather than force-fit a mismatched actionId", () => {
+    const prompt = buildChatSystemPrompt({ category: "knee", actionLibrary: library }, []);
+    expect(prompt).toContain("直接生成新动作");
+    expect(prompt).not.toContain("优先使用可用动作库里的 actionId");
+  });
+
+  it("lets the model choose how many actions to recommend", () => {
+    const prompt = buildChatSystemPrompt({ category: "knee", actionLibrary: library }, []);
+    expect(prompt).toContain("1-5 个");
+  });
+
+  it("parses actionType and targetMuscles out of the model response", () => {
+    const result = buildGuidedChatResponse(
+      [{ role: "user", content: "膝盖后方紧" }],
+      { category: "knee" },
+      JSON.stringify({
+        content: "试试拉伸大腿后侧。",
+        recommendedActions: [
+          {
+            title: "坐姿腘绳肌拉伸",
+            bodyRegion: "knee",
+            actionType: "stretch",
+            targetMuscles: ["腘绳肌"],
+            phase: "活动度与拉伸",
+            defaultDosage: "3 组 x 30 秒",
+            instructions: ["坐在椅子边缘"],
+            contraindications: ["疼痛加重立即停止"],
+            progressionCriteria: ["牵拉感可耐受"],
+            tags: ["膝盖"],
+          },
+        ],
+      }),
+    );
+    expect(result.recommendedActions?.[0].actionType).toBe("stretch");
+    expect(result.recommendedActions?.[0].targetMuscles).toEqual(["腘绳肌"]);
+  });
+
+  it("keeps up to five recommended actions", () => {
+    const actions = Array.from({ length: 6 }, (_unused, index) => ({
+      title: `动作${index}`,
+      bodyRegion: "knee",
+      actionType: "strength",
+      targetMuscles: ["股四头肌"],
+      phase: "力量",
+      defaultDosage: "3 组 x 10 次",
+      instructions: ["步骤"],
+      contraindications: ["疼痛加重立即停止"],
+      progressionCriteria: ["无痛完成"],
+      tags: ["膝盖"],
+    }));
+    const result = buildGuidedChatResponse([], {}, JSON.stringify({ content: "计划", recommendedActions: actions }));
+    expect(result.recommendedActions).toHaveLength(5);
   });
 });

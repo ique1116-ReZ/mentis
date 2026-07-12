@@ -3,6 +3,7 @@ import { dirname, join, parse, resolve } from "node:path";
 import { REHAB_CONSULT_CATEGORIES } from "./platform.js";
 import { sanitizeActionText, truncateForMemory } from "./helpers.js";
 import { buildChatRagContext } from "./rag.js";
+import { rankActionsForChat } from "./action-retrieval.js";
 import type {
   ActionLibraryItem,
   ChatContext,
@@ -12,6 +13,7 @@ import type {
   GuidedChatResult,
   QwenChatClientOptions,
   RagEvidenceSnippet,
+  RehabActionType,
   RehabConsultCategory,
   UserMemory,
 } from "./types.js";
@@ -76,7 +78,7 @@ export class QwenChatClient {
           messages: [
             {
               role: "system",
-              content: buildChatSystemPrompt(effectiveContext),
+              content: buildChatSystemPrompt(effectiveContext, messages),
             },
             ...messages,
           ],
@@ -128,7 +130,7 @@ export async function chatWithQwen(
   return new QwenChatClient(options).chat(messages, context);
 }
 
-export function buildChatSystemPrompt(context: ChatContext = {}): string {
+export function buildChatSystemPrompt(context: ChatContext = {}, messages: ChatMessage[] = []): string {
   const category = context.category ? REHAB_CONSULT_CATEGORIES[context.category] : undefined;
   const categoryScope = category
     ? [
@@ -154,13 +156,16 @@ export function buildChatSystemPrompt(context: ChatContext = {}): string {
     ].join("\n"),
     [
       "输出格式：只返回一个 JSON 对象，不要包裹代码块。",
-      'JSON 字段：{"content":"给用户看的回答","question":"下一步只问一个问题，可省略","options":[{"label":"按钮文案","value":"点击后发送给模型的完整回答"}],"recommendedActions":[{"actionId":"已有动作 id，可省略","title":"动作名","bodyRegion":"knee","phase":"阶段","defaultDosage":"剂量","instructions":["步骤"],"contraindications":["停止条件"],"progressionCriteria":["进阶标准"],"tags":["标签"],"reason":"为什么推荐"}]}',
+      'JSON 字段：{"content":"给用户看的回答","question":"下一步只问一个问题，可省略","options":[{"label":"按钮文案","value":"点击后发送给模型的完整回答"}],"recommendedActions":[{"actionId":"库里动作 id，可省略","title":"动作名","bodyRegion":"knee","actionType":"stretch|strength|activation|mobility|balance","targetMuscles":["腘绳肌"],"phase":"阶段","defaultDosage":"剂量","instructions":["步骤"],"contraindications":["停止条件"],"progressionCriteria":["进阶标准"],"tags":["标签"],"reason":"为什么推荐"}]}',
       "如果不需要按钮，省略 question 和 options。",
       "如果推荐训练动作，必须放在 recommendedActions，不要只把动作写进 content 散文里。",
-      "优先使用可用动作库里的 actionId；如果没有合适动作，可以生成新的运动康复动作，但必须完整填写 recommendedActions 字段。",
+      "recommendedActions 里的动作必须和你在 content 里描述的动作完全一致。content 说拉伸大腿后侧，就不能推荐拉伸大腿前侧的动作。",
+      "actionType 和 targetMuscles 必填，它们要如实描述你推荐的这个动作。",
+      "关于 actionId：只有当动作库里某个动作【就是】你要推荐的那个动作时，才填它的 actionId。哪怕只是部位相近、名字相似，也不要填——直接生成新动作，把字段填完整即可。填错 actionId 比不填更糟。",
+      "一次推荐 1-5 个动作，具体几个由你根据用户情况判断，不用凑数也不用只给一个。",
       "content 必须能单独成立；question 和 options 只是结构化交互辅助。",
     ].join("\n"),
-    formatActionLibraryContext(context.actionLibrary ?? [], context.category),
+    formatActionLibraryContext(context.actionLibrary ?? [], messages, context.category),
     buildUserMemoryContext(context.userMemory),
     categoryScope,
     ragContext
@@ -326,6 +331,14 @@ function normalizeRecommendedActions(value: unknown): ChatRecommendedAction[] {
         progressionCriteria: normalizeStringList(action.progressionCriteria).slice(0, 5),
         tags: normalizeStringList(action.tags).slice(0, 10),
       };
+      const actionType = normalizeActionType(readFirstString(action, ["actionType", "type"]));
+      if (actionType) {
+        recommendedAction.actionType = actionType;
+      }
+      const targetMuscles = normalizeStringList(action.targetMuscles).slice(0, 5);
+      if (targetMuscles.length > 0) {
+        recommendedAction.targetMuscles = targetMuscles;
+      }
       if (actionId) {
         recommendedAction.actionId = actionId;
       }
@@ -335,7 +348,7 @@ function normalizeRecommendedActions(value: unknown): ChatRecommendedAction[] {
       return recommendedAction;
     })
     .filter((action): action is ChatRecommendedAction => Boolean(action))
-    .slice(0, 4);
+    .slice(0, 5);
 }
 
 function normalizeStringList(value: unknown): string[] {
@@ -349,6 +362,20 @@ function normalizeStringList(value: unknown): string[] {
 
 function sanitizeActionId(content: string): string {
   return content.replace(/[^a-zA-Z0-9_-]/g, "").trim().slice(0, 80);
+}
+
+function normalizeActionType(value: string): RehabActionType | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "stretch" ||
+    normalized === "strength" ||
+    normalized === "activation" ||
+    normalized === "mobility" ||
+    normalized === "balance"
+  ) {
+    return normalized;
+  }
+  return undefined;
 }
 
 function normalizeActionBodyRegion(value: string): ActionLibraryItem["bodyRegion"] {
@@ -370,38 +397,26 @@ function sanitizeOptionText(content: string): string {
   return content.replace(/\s+/g, " ").trim().slice(0, 80);
 }
 
-function formatActionLibraryContext(actions: ActionLibraryItem[], category?: RehabConsultCategory): string {
-  const bodyRegion = actionBodyRegionForCategory(category);
-  const relevantActions = actions
-    .filter((action) => bodyRegion === "other" || action.bodyRegion === bodyRegion)
-    .slice(0, 12);
+function formatActionLibraryContext(
+  actions: ActionLibraryItem[],
+  messages: ChatMessage[],
+  category?: RehabConsultCategory,
+): string {
+  const relevantActions = rankActionsForChat(actions, messages, category, 15);
   if (relevantActions.length === 0) {
-    return "可用动作库：当前类别暂无足够康复动作；可以生成新的结构化康复动作。";
+    return [
+      "可用动作库：当前类别库里还没有动作。",
+      "请直接按 recommendedActions 的格式生成合适的康复动作，字段要填完整。",
+    ].join("\n");
   }
   return [
-    "可用动作库（优先复用 actionId）：",
-    ...relevantActions.map(
-      (action) =>
-        `- ${action.id}: ${action.title}；${action.bodyRegion}；${action.phase}；${action.defaultDosage}`,
-    ),
+    "可用动作库（下面每行是：id: 动作名；类型；目标肌群；阶段；剂量）：",
+    ...relevantActions.map((action) => {
+      const muscles = action.targetMuscles?.length ? action.targetMuscles.join("、") : "未标注";
+      const type = action.actionType ?? "未标注";
+      return `- ${action.id}: ${action.title}；${type}；${muscles}；${action.phase}；${action.defaultDosage}`;
+    }),
   ].join("\n");
-}
-
-function actionBodyRegionForCategory(category?: RehabConsultCategory): ActionLibraryItem["bodyRegion"] {
-  switch (category) {
-    case "knee":
-      return "knee";
-    case "ankle":
-      return "ankle_foot";
-    case "shoulder":
-      return "shoulder";
-    case "lower_back":
-      return "spine";
-    case "hip":
-      return "hip";
-    default:
-      return "other";
-  }
 }
 
 function buildLocalSafetyResponse(messages: ChatMessage[], context: ChatContext): GuidedChatResult | null {
