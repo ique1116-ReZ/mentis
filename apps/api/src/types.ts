@@ -8,6 +8,7 @@ import type {
   ConsultationMessage,
   ConsultationPaymentMode,
   ConsultationSession,
+  PlanCompletion,
   PlatformActor,
   RehabActionType,
   RehabPlan,
@@ -25,6 +26,7 @@ export type {
   ConsultationMessage,
   ConsultationPaymentMode,
   ConsultationSession,
+  PlanCompletion,
   PlatformActor,
   RehabActionType,
   RehabPlan,
@@ -129,6 +131,17 @@ export interface MemoryCaseSummary {
   createdAt: string;
 }
 
+export interface MemoryTrainingPlanItem {
+  actionId?: string;
+  title: string;
+  meta: string;
+  state: "done" | "todo";
+  phase?: string;
+  instructions?: string[];
+  contraindications?: string[];
+  progressionCriteria?: string[];
+}
+
 export interface MemoryTrainingPlan {
   id: string;
   caseId: string;
@@ -137,7 +150,8 @@ export interface MemoryTrainingPlan {
   status: "active" | "paused" | "completed";
   dayLabel: string;
   completionPercent: number;
-  items: Array<{ title: string; meta: string; state: "done" | "todo" }>;
+  items: MemoryTrainingPlanItem[];
+  completions?: PlanCompletion[];
   stage: {
     name: string;
     progressLabel: string;

@@ -575,3 +575,44 @@ function toFiniteTime(value: string): number | undefined {
 function cryptoSafeId(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 20);
 }
+
+export interface PlanCompletion {
+  /** YYYY-MM-DD，由服务端日期生成 */
+  date: string;
+  doneKeys: string[];
+}
+
+/** 结构化类型：api 和 web 各自的 MemoryTrainingPlan 都满足它，不需要互相 import。 */
+export interface PlanCheckItem {
+  actionId?: string;
+  title: string;
+}
+
+export interface PlanCheckable {
+  items: PlanCheckItem[];
+  completions?: PlanCompletion[];
+}
+
+export const MAX_PLAN_COMPLETION_DAYS = 30;
+
+export function dateKey(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+export function planItemKey(item: PlanCheckItem): string {
+  return item.actionId ?? item.title;
+}
+
+export function doneKeysForDate(plan: PlanCheckable, date: string): Set<string> {
+  const entry = plan.completions?.find((completion) => completion.date === date);
+  return new Set(entry?.doneKeys ?? []);
+}
+
+export function completionPercentForDate(plan: PlanCheckable, date: string): number {
+  if (plan.items.length === 0) {
+    return 0;
+  }
+  const doneKeys = doneKeysForDate(plan, date);
+  const doneCount = plan.items.filter((item) => doneKeys.has(planItemKey(item))).length;
+  return Math.round((doneCount / plan.items.length) * 100);
+}
