@@ -73,7 +73,11 @@ export function App() {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const consultationStreamRef = useRef<EventSource | null>(null);
   const loadingCaseMessageIdsRef = useRef<Set<string>>(new Set());
-  const planToggleRequestIdRef = useRef(0);
+  // 计划打勾/记忆刷新共用的世代计数器：每次 togglePlanItem 调用都会推进它。
+  // 任何异步响应（打勾的 POST，也包括 refreshMemoryForCurrentUser 的 GET）落地前
+  // 都要先比对这个计数器是否还是发起时的值，不是的话说明期间又有更新的打勾发生，
+  // 这份响应就是过期快照，绝不能用它整体覆盖 session/localStorage。
+  const memoryWriteGenerationRef = useRef(0);
   const activeCase = cases.find((patientCase) => patientCase.id === activeCaseId) ?? null;
   const selectedCategory = activeCase ? consultCategories.find((category) => category.id === activeCase.categoryId) ?? null : null;
   const messages = activeCase?.messages ?? [];
@@ -684,6 +688,13 @@ export function App() {
       return;
     }
 
+    // 在发起 GET 之前先记下当前世代。这次刷新可能是打勾失败后触发的重新同步，
+    // 而它的 await 期间用户完全可能又打了一次新的勾——那次打勾会推进世代计数器，
+    // 并带着自己的乐观更新/成功响应。等这份 GET 落地时如果世代已经变了，说明
+    // 它反映的是比新打勾更旧的服务端快照，绝不能整体覆盖 session，否则会把
+    // 新打勾从界面和 localStorage 里冲掉。
+    const generation = memoryWriteGenerationRef.current;
+
     try {
       const response = await fetch(`${API_BASE}/v1/users/${encodeURIComponent(session.user.id)}/memory`, {
         headers: {
@@ -694,9 +705,18 @@ export function App() {
         return;
       }
       const memory = (await response.json()) as UserMemory;
-      const nextSession = { ...session, memory };
-      setSession(nextSession);
-      storeSession(nextSession);
+      if (generation !== memoryWriteGenerationRef.current) {
+        // 期间已经有更新的打勾发生，丢弃这份过期快照，不写 session 也不写 storage。
+        return;
+      }
+      setSession((prev) => {
+        if (!prev) {
+          return prev;
+        }
+        const nextSession = { ...prev, memory };
+        storeSession(nextSession);
+        return nextSession;
+      });
       setCases((currentCases) => {
         const hydratedCases = hydrateCasesFromMemory(memory, currentCases);
         setActiveCaseId((currentActiveCaseId) =>
@@ -893,13 +913,14 @@ export function App() {
     if (!session) {
       return;
     }
-    // 请求计数器：每次打勾都会推进它，异步响应回来时先比对是不是还是"最新一次"。
+    // 世代计数器：每次打勾都会推进它，异步响应回来时先比对是不是还是"最新一次"。
     // 用户可能连续快速打勾 A、B 两个动作，两个请求都在飞行中，网络抖动可能让 A 的响应
     // 晚于 B 落地——这时 A 的响应（不含 B 的勾选）是过期快照，不能用它整体覆盖 memory，
     // 否则会把 B 已经打上的勾从界面上冲掉。同理，失败回滚也不能用调用发起时捕获的
     // session 快照——那个快照可能比后来的乐观更新还旧。所以下面全程只用函数式
-    // setSession(prev => ...)，从不 spread 闭包捕获的 session。
-    const requestId = ++planToggleRequestIdRef.current;
+    // setSession(prev => ...)，从不 spread 闭包捕获的 session。失败回滚会调用
+    // refreshMemoryForCurrentUser，它内部也会用同一个计数器做过期检查（见该函数定义处）。
+    const requestId = ++memoryWriteGenerationRef.current;
     const userId = session.user.id;
     const token = session.token;
     const today = dateKey(new Date());
@@ -944,7 +965,7 @@ export function App() {
         throw new Error(`completion_failed_${response.status}`);
       }
       const memory = (await response.json()) as UserMemory;
-      if (requestId !== planToggleRequestIdRef.current) {
+      if (requestId !== memoryWriteGenerationRef.current) {
         // 期间已经又发起了更新的打勾请求，那次请求自己的乐观状态/响应更能代表当前
         // 状态，这里就不要用这份过期响应去覆盖它了。
         return;
@@ -958,7 +979,7 @@ export function App() {
         return nextSession;
       });
     } catch {
-      if (requestId !== planToggleRequestIdRef.current) {
+      if (requestId !== memoryWriteGenerationRef.current) {
         return;
       }
       // 不用捕获的快照回滚（可能已经过期），改为向服务端重新拉取权威状态。
