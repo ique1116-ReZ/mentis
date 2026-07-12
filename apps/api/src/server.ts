@@ -27,6 +27,7 @@ import {
   registerDemoUser,
   rememberCase,
   rememberTrainingPlan,
+  recordPlanCompletion,
   reviewClinicianCredential,
   resolveRecommendedActions,
   resolveAuthenticatedActor,
@@ -378,6 +379,22 @@ const server = createServer(async (request, response) => {
       requireMemoryAccess(actor, userId);
       const body = await readJson(request);
       const result = rememberTrainingPlan(platform, userId, body as unknown as MemoryTrainingPlanInput);
+      finish(response, method, result);
+      return;
+    }
+
+    const planCompletionMatch = url.pathname.match(
+      /^\/v1\/users\/([^/]+)\/memory\/training-plans\/([^/]+)\/completions$/,
+    );
+    if (method === "POST" && planCompletionMatch) {
+      const userId = decodeURIComponent(planCompletionMatch[1]);
+      const planId = decodeURIComponent(planCompletionMatch[2]);
+      requireMemoryAccess(actor, userId);
+      const body = await readJson(request);
+      if (typeof body.key !== "string" || typeof body.done !== "boolean") {
+        throw badRequest("key must be a string and done must be a boolean");
+      }
+      const result = recordPlanCompletion(platform, userId, planId, body.key, body.done);
       finish(response, method, result);
       return;
     }
