@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import {
   acceptConsultationPlan,
+  appendCaseMessages,
   authenticateDemoUser,
   badRequest,
   bookConsultationFromAvailability,
@@ -20,6 +21,7 @@ import {
   joinConsultationSession,
   listAdminClinicianReviews,
   listActionLibrary,
+  listCaseMessages,
   listClinicianAvailability,
   listClinicians,
   registerDemoUser,
@@ -43,6 +45,7 @@ import {
   type MemoryTrainingPlanInput,
   type RegistrationInput,
   type RehabConsultCategory,
+  type StoredCaseMessage,
 } from "./index.js";
 import { flushPersist, hydrateFromDisk, schedulePersist } from "./storage.js";
 
@@ -344,6 +347,31 @@ const server = createServer(async (request, response) => {
       const result = deleteRememberedCase(platform, userId, decodeURIComponent(deleteCaseMemoryMatch[2]));
       finish(response, method, result);
       return;
+    }
+
+    const caseMessagesMatch = url.pathname.match(/^\/v1\/users\/([^/]+)\/cases\/([^/]+)\/messages$/);
+    if (caseMessagesMatch) {
+      const userId = decodeURIComponent(caseMessagesMatch[1]);
+      const caseId = decodeURIComponent(caseMessagesMatch[2]);
+      requireMemoryAccess(actor, userId);
+
+      if (method === "GET") {
+        finish(response, method, listCaseMessages(platform, caseId));
+        return;
+      }
+
+      if (method === "POST") {
+        const body = await readJson(request);
+        if (!Array.isArray(body.messages)) {
+          throw badRequest("messages must be an array");
+        }
+        const incoming = (body.messages as StoredCaseMessage[]).map((entry) => ({
+          ...entry,
+          createdAt: entry.createdAt || new Date().toISOString(),
+        }));
+        finish(response, method, appendCaseMessages(platform, caseId, incoming));
+        return;
+      }
     }
 
     const trainingPlanMemoryMatch = url.pathname.match(/^\/v1\/users\/([^/]+)\/memory\/training-plans$/);
