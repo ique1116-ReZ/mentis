@@ -12,6 +12,7 @@ import {
   isCompletePlanPatch,
   makeComplaintSummary,
   makeComplaintTitle,
+  mergeFetchedMessages,
   mergePlanGoals,
   trainingPlanToCasePlan,
 } from "./caseUtils";
@@ -70,6 +71,7 @@ export function App() {
   const [selectedAvailabilitySlotId, setSelectedAvailabilitySlotId] = useState<string | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const consultationStreamRef = useRef<EventSource | null>(null);
+  const loadingCaseMessageIdsRef = useRef<Set<string>>(new Set());
   const activeCase = cases.find((patientCase) => patientCase.id === activeCaseId) ?? null;
   const selectedCategory = activeCase ? consultCategories.find((category) => category.id === activeCase.categoryId) ?? null : null;
   const messages = activeCase?.messages ?? [];
@@ -196,9 +198,8 @@ export function App() {
     setActiveCaseId(patientCase.id);
     setActivePage("home");
     setInput("");
-    if (!patientCase.messagesLoaded) {
-      void loadCaseMessages(patientCase.id);
-    }
+    // 消息拉取交给下面依赖 [activeCaseId, cases] 的 effect 统一触发，
+    // 避免这里再显式调用一次导致同一病例并发发出两个相同的 GET。
     syncViewportAfterChatChange();
   }
 
@@ -713,6 +714,12 @@ export function App() {
     if (!session) {
       return;
     }
+    // 单飞守卫：同一病例的拉取正在进行时直接跳过，避免选中病例后连续发送消息
+    // 触发多个并发 GET，最终让先发出、后返回的过期响应把最新对话冲掉。
+    if (loadingCaseMessageIdsRef.current.has(caseId)) {
+      return;
+    }
+    loadingCaseMessageIdsRef.current.add(caseId);
     try {
       const response = await fetch(
         `${API_BASE}/v1/users/${encodeURIComponent(session.user.id)}/cases/${encodeURIComponent(caseId)}/messages`,
@@ -721,14 +728,18 @@ export function App() {
       if (!response.ok) {
         return;
       }
-      const messages = (await response.json()) as ChatMessage[];
+      const fetchedMessages = (await response.json()) as ChatMessage[];
       setCases((currentCases) =>
         currentCases.map((patientCase) =>
-          patientCase.id === caseId ? { ...patientCase, messages, messagesLoaded: true } : patientCase,
+          patientCase.id === caseId
+            ? { ...patientCase, messages: mergeFetchedMessages(patientCase.messages, fetchedMessages), messagesLoaded: true }
+            : patientCase,
         ),
       );
     } catch {
       // 拉取失败就保持未加载状态，下次进入病例会重试
+    } finally {
+      loadingCaseMessageIdsRef.current.delete(caseId);
     }
   }
 

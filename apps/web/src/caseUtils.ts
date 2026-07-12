@@ -1,5 +1,5 @@
 import { pendingComplaintTitle } from "./consultCategories";
-import type { CasePlan, ChatPlanPatch, MemoryTrainingPlan, PatientCase, TrainingPlan, UserMemory } from "./types";
+import type { CasePlan, ChatMessage, ChatPlanPatch, MemoryTrainingPlan, PatientCase, TrainingPlan, UserMemory } from "./types";
 
 export function isComplaintPending(patientCase: PatientCase) {
   return patientCase.title === pendingComplaintTitle;
@@ -90,6 +90,13 @@ export function isCompletePlanPatch(planPatch: ChatPlanPatch): planPatch is Case
       typeof planPatch.stage.progressPercent === "number" &&
       Array.isArray(planPatch.stage.goals),
   );
+}
+
+// 消息接口是只追加的：一次拉取如果比本地已有的消息少，说明这是一次过期的响应
+// （在拉取进行期间，本地又追加了新消息）。此时保留本地状态，避免把正在进行的
+// 对话用旧快照覆盖掉；否则以拉取结果为准（服务端持久化了更完整的历史）。
+export function mergeFetchedMessages(local: ChatMessage[], fetched: ChatMessage[]): ChatMessage[] {
+  return fetched.length >= local.length ? fetched : local;
 }
 
 export function trainingPlanToCasePlan(plan: TrainingPlan): CasePlan {
