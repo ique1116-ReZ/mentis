@@ -1,18 +1,23 @@
+import { completionPercentForDate, dateKey, doneKeysForDate, planItemKey } from "@mentis/domain";
 import type { MemoryTrainingPlan, PatientCase } from "../types";
 
 export function PlansPage({
   cases,
   onOpenHome,
   onOpenRecords,
+  onToggleItem,
   plans,
 }: {
   cases: PatientCase[];
   onOpenHome: () => void;
   onOpenRecords: () => void;
+  onToggleItem: (planId: string, key: string, done: boolean) => void;
   plans: MemoryTrainingPlan[];
 }) {
   const activePlan = plans.find((plan) => plan.status === "active") ?? plans[0] ?? null;
   const sourceCase = activePlan ? cases.find((patientCase) => patientCase.id === activePlan.caseId) ?? null : null;
+  const today = dateKey(new Date());
+  const doneKeys = activePlan ? doneKeysForDate(activePlan, today) : new Set<string>();
 
   return (
     <section className="page-shell plan-page">
@@ -36,9 +41,9 @@ export function PlansPage({
               <p>{activePlan.stage.name} · {activePlan.stage.progressLabel}</p>
               <div className="plan-progress-row">
                 <div className="progress-line amber">
-                  <span style={{ width: `${activePlan.completionPercent}%` }} />
+                  <span style={{ width: `${completionPercentForDate(activePlan, today)}%` }} />
                 </div>
-                <strong>{activePlan.completionPercent}%</strong>
+                <strong>{completionPercentForDate(activePlan, today)}%</strong>
               </div>
             </div>
             <div className="plan-meta-grid">
@@ -61,7 +66,7 @@ export function PlansPage({
             <div className="plan-section wide">
               <div className="section-title-row">
                 <h2>今日训练</h2>
-                <span>{activePlan.updatedAt.slice(0, 10)}</span>
+                <span>{today}</span>
               </div>
               <ol className="training-task-list">
                 {activePlan.items.map((item, index) => (
@@ -84,7 +89,14 @@ export function PlansPage({
                         <small className="training-caution">进阶标准：{item.progressionCriteria.slice(0, 3).join("；")}</small>
                       ) : null}
                     </div>
-                    <em>{item.state === "done" ? "已完成" : "待完成"}</em>
+                    <label className="training-check">
+                      <input
+                        checked={doneKeys.has(planItemKey(item))}
+                        onChange={(event) => onToggleItem(activePlan.id, planItemKey(item), event.target.checked)}
+                        type="checkbox"
+                      />
+                      <span>{doneKeys.has(planItemKey(item)) ? "已完成" : "标记完成"}</span>
+                    </label>
                   </li>
                 ))}
               </ol>

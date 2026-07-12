@@ -100,6 +100,7 @@ export type MemoryTrainingPlan = {
   items: CasePlanItem[];
   stage: CasePlan["stage"];
   updatedAt: string;
+  completions?: { date: string; doneKeys: string[] }[];
 };
 
 export type AuthSession = {

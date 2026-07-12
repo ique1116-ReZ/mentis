@@ -1301,13 +1301,32 @@ svg {
   color: var(--muted);
 }
 
-.training-task-list em {
-  padding: 7px 10px;
-  border-radius: 7px;
-  color: var(--green);
-  background: var(--green-soft);
-  font-style: normal;
-  font-weight: 800;
+.training-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.training-check input[type="checkbox"] {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.training-check input[type="checkbox"]:checked {
+  border-color: var(--orange-strong);
+  background: var(--orange);
+}
+
+.training-check input[type="checkbox"]:checked + span {
+  color: var(--orange-strong);
 }
 
 .training-detail-list {

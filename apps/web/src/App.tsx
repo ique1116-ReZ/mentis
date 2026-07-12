@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { dateKey } from "@mentis/domain";
 import rezLogo from "./assets/rez-logo.png";
 import { loadStoredSession, storeSession, validateStoredSession } from "./authSession";
 import { API_BASE } from "./apiBase";
@@ -879,6 +880,52 @@ export function App() {
     }
   }
 
+  async function togglePlanItem(planId: string, key: string, done: boolean) {
+    if (!session) {
+      return;
+    }
+    const previousMemory = session.memory;
+
+    const today = dateKey(new Date());
+    const optimisticPlans = session.memory.trainingPlans.map((plan) => {
+      if (plan.id !== planId) {
+        return plan;
+      }
+      const completions = [...(plan.completions ?? [])];
+      const index = completions.findIndex((entry) => entry.date === today);
+      const existing = index >= 0 ? completions[index] : { date: today, doneKeys: [] };
+      const doneKeys = done
+        ? Array.from(new Set([...existing.doneKeys, key]))
+        : existing.doneKeys.filter((candidate) => candidate !== key);
+      const entry = { date: today, doneKeys };
+      if (index >= 0) {
+        completions[index] = entry;
+      } else {
+        completions.push(entry);
+      }
+      return { ...plan, completions };
+    });
+    setSession({ ...session, memory: { ...session.memory, trainingPlans: optimisticPlans } });
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/v1/users/${encodeURIComponent(session.user.id)}/memory/training-plans/${encodeURIComponent(planId)}/completions`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ key, done }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(`completion_failed_${response.status}`);
+      }
+      const memory = (await response.json()) as UserMemory;
+      setSession({ ...session, memory });
+    } catch {
+      setSession({ ...session, memory: previousMemory });
+    }
+  }
+
   if (!session) {
     return <LoginScreen onLogin={login} onRegister={register} />;
   }
@@ -1147,6 +1194,7 @@ export function App() {
           cases={cases}
           onOpenHome={() => navigatePage("home")}
           onOpenRecords={() => navigatePage("records")}
+          onToggleItem={togglePlanItem}
           plans={displayTrainingPlans(session.memory.trainingPlans, cases)}
         />
       ) : (
