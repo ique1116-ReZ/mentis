@@ -896,6 +896,33 @@ svg {
   opacity: 0.52;
 }
 
+.action-add-all {
+  align-self: flex-start;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(217, 119, 87, 0.42);
+  border-radius: 7px;
+  background: rgba(217, 119, 87, 0.1);
+  color: var(--orange-strong);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.action-add-all:hover:not(:disabled) {
+  border-color: var(--orange-strong);
+  background: rgba(217, 119, 87, 0.16);
+}
+
+.action-add-all:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.recommended-action-card .action-added {
+  color: #9a9a92;
+  font-size: 13px;
+}
+
 .message-supplement {
   display: grid;
   gap: 7px;

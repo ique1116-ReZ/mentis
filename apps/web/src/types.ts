@@ -25,6 +25,8 @@ export type ChatRecommendedAction = {
   progressionCriteria: string[];
   tags: string[];
   reason?: string;
+  actionType?: "stretch" | "strength" | "activation" | "mobility" | "balance";
+  targetMuscles?: string[];
 };
 
 export type ChatPlanPatch = Partial<CasePlan>;

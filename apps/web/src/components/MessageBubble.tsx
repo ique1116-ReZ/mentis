@@ -6,13 +6,15 @@ import type { ChatMessage, ChatOption, ChatRecommendedAction } from "../types";
 export function MessageBubble({
   disabled = false,
   message,
-  onAddRecommendedAction,
+  onAddRecommendedActions,
+  isActionInPlan,
   onSelectOption,
   onSubmitSupplement,
 }: {
   disabled?: boolean;
   message: ChatMessage;
-  onAddRecommendedAction?: (action: ChatRecommendedAction) => void;
+  onAddRecommendedActions?: (actions: ChatRecommendedAction[]) => void;
+  isActionInPlan?: (action: ChatRecommendedAction) => boolean;
   onSelectOption?: (option: ChatOption) => void;
   onSubmitSupplement?: (content: string) => void;
 }) {
@@ -47,15 +49,31 @@ export function MessageBubble({
         ) : null}
         {recommendedActions.length > 0 ? (
           <div className="recommended-actions">
+            {recommendedActions.length > 1 ? (
+              <button
+                className="action-add-all"
+                disabled={disabled}
+                onClick={() =>
+                  onAddRecommendedActions?.(recommendedActions.filter((action) => !isActionInPlan?.(action)))
+                }
+                type="button"
+              >
+                全部加入今日计划
+              </button>
+            ) : null}
             {recommendedActions.map((action) => (
               <article className="recommended-action-card" key={action.actionId ?? action.title}>
                 <div>
                   <strong>{action.title}</strong>
                   <span>{action.phase} · {action.defaultDosage}</span>
                 </div>
-                <button disabled={disabled} onClick={() => onAddRecommendedAction?.(action)} type="button">
-                  加入今日计划
-                </button>
+                {isActionInPlan?.(action) ? (
+                  <span className="action-added">已在计划中</span>
+                ) : (
+                  <button disabled={disabled} onClick={() => onAddRecommendedActions?.([action])} type="button">
+                    加入今日计划
+                  </button>
+                )}
               </article>
             ))}
           </div>

@@ -232,12 +232,8 @@ export function App() {
     );
   }
 
-  function addRecommendedActionToPlan(action: ChatRecommendedAction) {
-    if (!activeCase) {
-      return;
-    }
-    const existingPlan = activeCase.plan;
-    const nextItem = {
+  function toPlanItem(action: ChatRecommendedAction) {
+    return {
       actionId: action.actionId,
       title: action.title,
       meta: action.defaultDosage,
@@ -247,29 +243,50 @@ export function App() {
       contraindications: action.contraindications,
       progressionCriteria: action.progressionCriteria,
     };
-    const existingItems = existingPlan?.items ?? [];
-    const isDuplicate = existingItems.some((item) =>
-      action.actionId ? item.actionId === action.actionId : item.title === action.title,
+  }
+
+  function isActionInActivePlan(action: ChatRecommendedAction): boolean {
+    const items = activeCase?.plan?.items ?? [];
+    return items.some((item) => (action.actionId ? item.actionId === action.actionId : item.title === action.title));
+  }
+
+  function addRecommendedActionsToPlan(actions: ChatRecommendedAction[]) {
+    if (!activeCase || actions.length === 0) {
+      return;
+    }
+
+    const existingPlan = activeCase.plan;
+    const startingItems = existingPlan?.items ?? [];
+    const nextItems = [...startingItems];
+    for (const action of actions) {
+      const isDuplicate = nextItems.some((item) =>
+        action.actionId ? item.actionId === action.actionId : item.title === action.title,
+      );
+      if (!isDuplicate) {
+        nextItems.push(toPlanItem(action));
+      }
+    }
+    if (nextItems.length === startingItems.length) {
+      return;
+    }
+
+    const mergedGoals = actions.reduce(
+      (goals, action) => mergePlanGoals(goals, action.progressionCriteria),
+      existingPlan?.stage.goals ?? [],
     );
+    const [firstAction] = actions;
     const nextPlan: CasePlan = existingPlan
-      ? {
-          ...existingPlan,
-          items: isDuplicate ? existingItems : [...existingItems, nextItem],
-          stage: {
-            ...existingPlan.stage,
-            goals: mergePlanGoals(existingPlan.stage.goals, action.progressionCriteria),
-          },
-        }
+      ? { ...existingPlan, items: nextItems, stage: { ...existingPlan.stage, goals: mergedGoals } }
       : {
           title: `${activeCase.title === pendingComplaintTitle ? "康复" : activeCase.title}训练计划`,
           dayLabel: "今日训练",
           completionPercent: 0,
-          items: [nextItem],
+          items: nextItems,
           stage: {
-            name: action.phase,
+            name: firstAction.phase,
             progressLabel: "第 1 天",
             progressPercent: 0,
-            goals: action.progressionCriteria.length > 0 ? action.progressionCriteria.slice(0, 3) : ["完成后 24 小时无明显加重"],
+            goals: mergedGoals.length > 0 ? mergedGoals.slice(0, 3) : ["完成后 24 小时无明显加重"],
           },
         };
 
@@ -993,7 +1010,8 @@ export function App() {
                     disabled={isSending}
                     key={`${message.role}-${index}`}
                     message={message}
-                    onAddRecommendedAction={addRecommendedActionToPlan}
+                    onAddRecommendedActions={addRecommendedActionsToPlan}
+                    isActionInPlan={isActionInActivePlan}
                     onSelectOption={(option) => sendMessage(option.value || option.label)}
                     onSubmitSupplement={(content) => sendMessage(content)}
                   />

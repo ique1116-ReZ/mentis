@@ -1,6 +1,8 @@
+import { fireEvent, render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { MessageBubble } from "./App";
+import type { ChatRecommendedAction } from "./types";
 
 describe("MessageBubble", () => {
   it("renders a supplemental composer after assistant-generated options", () => {
@@ -50,5 +52,47 @@ describe("MessageBubble", () => {
     expect(html).toContain("加入今日计划");
     expect(html).not.toContain("坐稳后慢慢伸直膝盖");
     expect(html).not.toContain("伸膝时疼痛超过 3/10");
+  });
+
+  it("offers a bulk add button when the assistant recommends more than one action", () => {
+    const added: ChatRecommendedAction[][] = [];
+    render(
+      <MessageBubble
+        message={{
+          role: "assistant",
+          content: "先做这两个",
+          recommendedActions: [
+            { title: "坐姿腘绳肌拉伸", bodyRegion: "knee", phase: "拉伸", defaultDosage: "3 组 x 30 秒", instructions: [], contraindications: [], progressionCriteria: [], tags: [] },
+            { title: "靠墙静蹲", bodyRegion: "knee", phase: "力量", defaultDosage: "3 组 x 30 秒", instructions: [], contraindications: [], progressionCriteria: [], tags: [] },
+          ],
+        }}
+        onAddRecommendedActions={(actions) => added.push(actions)}
+        isActionInPlan={() => false}
+        onSelectOption={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "全部加入今日计划" }));
+    expect(added[0]).toHaveLength(2);
+  });
+
+  it("marks actions already in the plan as non-actionable", () => {
+    render(
+      <MessageBubble
+        message={{
+          role: "assistant",
+          content: "加上这个",
+          recommendedActions: [
+            { title: "靠墙静蹲", bodyRegion: "knee", phase: "力量", defaultDosage: "3 组 x 30 秒", instructions: [], contraindications: [], progressionCriteria: [], tags: [] },
+          ],
+        }}
+        onAddRecommendedActions={() => {}}
+        isActionInPlan={() => true}
+        onSelectOption={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("已在计划中")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "加入今日计划" })).toBeNull();
   });
 });
