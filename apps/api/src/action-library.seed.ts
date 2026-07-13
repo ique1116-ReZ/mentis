@@ -151,7 +151,7 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
     bodyRegion: "knee",
     bodyRegions: ["knee"],
     actionType: "mobility",
-    targetMuscles: ["腘绳肌"],
+    targetMuscles: ["腘绳肌", "股四头肌"],
     source: "seed",
     phase: "镇痛与激活",
     defaultDosage: "每次 5-10 分钟，每天 3-4 次",
@@ -192,10 +192,11 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
     contraindications: [
       "训练中疼痛超过 4/10 立即停止",
       "髌骨前方出现摩擦痛或弹响伴疼痛时减小活动范围",
+      "空手做无妨；但踝部加负荷属于抗阻开链伸膝，ACL 重建术后早中期须经医生/治疗师许可后再加",
     ],
     progressionCriteria: [
       "顶端可完全伸直并保持 3 秒无抖动",
-      "可在踝部加 1-2 kg 负荷完成 3 组 x 12 次",
+      "可在踝部加 1-2 kg 负荷完成 3 组 x 12 次（ACL 术后须先获许可）",
     ],
     tags: ["膝盖", "伸膝", "股四头肌", "小范围"],
   },
@@ -236,7 +237,9 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
     bodyRegion: "knee",
     bodyRegions: ["knee"],
     actionType: "mobility",
-    targetMuscles: ["股四头肌"],
+    // 屈膝 ROM 动作两块肌肉都要列：模型描述足跟滑动时可能说腘绳肌、也可能说股四头肌，
+    // 匹配是 some()，只列一块就会永远失配、这条等于不存在。
+    targetMuscles: ["股四头肌", "腘绳肌"],
     source: "seed",
     phase: "活动度与拉伸",
     defaultDosage: "3 组 x 10 次，每次在最大屈膝位保持 5 秒",
@@ -263,7 +266,7 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
     bodyRegion: "knee",
     bodyRegions: ["knee"],
     actionType: "mobility",
-    targetMuscles: ["腘绳肌"],
+    targetMuscles: ["腘绳肌", "股四头肌"],
     source: "seed",
     phase: "活动度与拉伸",
     defaultDosage: "每次 5-10 分钟，每天 2-3 次",
@@ -411,7 +414,9 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
     contraindications: [
       "训练中疼痛超过 4/10 立即停止",
       "跟腱急性损伤或跟腱修复术后早期禁用",
+      "本动作由患侧腿在后承重、脚跟压地：术后负重限制未解除前不做，改为坐位或仰卧用毛巾勾脚牵拉",
       "牵拉时膝后出现尖锐痛应停止并减小前移幅度",
+      "小腿突发胀痛、发红发热并伴局部压痛，警惕深静脉血栓，立即停止并就医",
     ],
     progressionCriteria: [
       "踝背屈角度较前增大，下蹲时脚跟更容易踩实",
@@ -438,7 +443,9 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
     contraindications: [
       "训练中疼痛超过 4/10 立即停止",
       "跟腱急性疼痛期或跟腱术后早期禁用",
+      "本动作由患侧腿在后屈膝承重：术后负重限制未解除前不做，改为坐位屈膝用毛巾勾脚牵拉",
       "脚跟一旦离地即为代偿，应减小幅度而不是硬压",
+      "小腿突发胀痛、发红发热并伴局部压痛，警惕深静脉血栓，立即停止并就医",
     ],
     progressionCriteria: [
       "屈膝位踝背屈角度增大，下蹲时躯干更容易保持直立",
@@ -519,6 +526,7 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
     contraindications: [
       "训练中疼痛超过 4/10 立即停止",
       "跟腱或足底筋膜急性疼痛期减小角度、避免弹震",
+      "本动作为站立位患侧承重：术后负重限制未解除前不做，改为坐位用毛巾勾脚牵拉",
       "小腿突发胀痛伴发红发热应警惕血栓，立即停止并就医",
     ],
     progressionCriteria: [
@@ -744,38 +752,9 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
     ],
     progressionCriteria: [
       "可加负荷完成 3 组 x 12 次且两侧力量接近对称",
-      "俯卧抗阻屈膝时无牵扯痛，可进阶到北欧腿弯举的离心训练",
+      "俯卧抗阻屈膝时无牵扯痛；是否进阶到高强度离心（如北欧腿弯举）由治疗师评估后决定",
     ],
     tags: ["膝盖", "腘绳肌", "开链", "力量"],
-  },
-  {
-    id: "action_nordic_eccentric",
-    title: "北欧腿弯举（离心渐进）",
-    bodyRegion: "knee",
-    bodyRegions: ["knee"],
-    actionType: "strength",
-    targetMuscles: ["腘绳肌"],
-    source: "seed",
-    phase: "力量",
-    defaultDosage: "2-3 组 x 4-6 次（每周 1-2 次），下落全程控制 3-5 秒",
-    instructions: [
-      "跪在软垫上，躯干与大腿成一条直线，请同伴牢牢压住双侧脚踝（或用固定器）",
-      "保持髋部不折叠、臀部收紧，用大腿后侧的力量控制身体缓慢向前倒",
-      "尽量把「还能刹住」的角度往下延伸，感觉大腿后侧强烈拉紧",
-      "控制不住时双手撑地缓冲，再用手臂推起回到起始位（起身不靠腘绳肌）",
-      "初期只做很小的下落幅度，能全程控制多少就做多少，逐周增加",
-    ],
-    contraindications: [
-      "训练中疼痛超过 4/10 立即停止",
-      "这是高强度离心动作：腘绳肌拉伤未完全康复、或 ACL 自体腘绳肌腱重建术后早中期禁用，须经医生/治疗师许可",
-      "跪位膝前受压疼痛或膝关节屈曲受限者不做",
-      "训练后 48 小时内明显延迟性酸痛导致跛行，说明量过大，下次减半",
-    ],
-    progressionCriteria: [
-      "可在无痛下控制下落到水平位以下并保持动作不「折髋」",
-      "训练后 48 小时酸痛可耐受、不影响行走与既有跑步量",
-    ],
-    tags: ["膝盖", "腘绳肌", "离心", "进阶"],
   },
   {
     id: "action_romanian_deadlift",
@@ -1197,7 +1176,7 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
     title: "走跑交替",
     bodyRegion: "knee",
     bodyRegions: ["knee", "ankle_foot"],
-    actionType: "strength",
+    actionType: "conditioning",
     targetMuscles: ["股四头肌", "小腿三头肌"],
     source: "seed",
     phase: "回归活动",
@@ -1225,7 +1204,7 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
     title: "向前单腿跳",
     bodyRegion: "knee",
     bodyRegions: ["knee", "ankle_foot"],
-    actionType: "balance",
+    actionType: "plyometric",
     targetMuscles: ["股四头肌", "小腿三头肌"],
     source: "seed",
     phase: "回归活动",
@@ -1253,7 +1232,7 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
     title: "侧向单腿跳",
     bodyRegion: "knee",
     bodyRegions: ["knee", "hip"],
-    actionType: "balance",
+    actionType: "plyometric",
     targetMuscles: ["臀中肌", "股四头肌"],
     source: "seed",
     phase: "回归活动",
@@ -1274,5 +1253,38 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
       "可连续跳跃（不停顿）且全程膝盖不内扣",
     ],
     tags: ["膝盖", "侧向", "跳跃", "回归运动"],
+  },
+  {
+    // 高强度离心，ACL 自体腘绳肌腱重建术后早中期禁用。
+    // 模型在选动作时只看得到 `id: 标题；类型；目标肌群；阶段；剂量` 这一行，
+    // contraindications 是选完之后才展示给病人的——所以把关必须写进标题/阶段/剂量里，
+    // 否则病人一句「大腿后侧紧」就能靠 TF-IDF 把这条捞上菜单。
+    id: "action_nordic_eccentric",
+    title: "北欧腿弯举（进阶，需治疗师许可）",
+    bodyRegion: "knee",
+    bodyRegions: ["knee"],
+    actionType: "strength",
+    targetMuscles: ["腘绳肌"],
+    source: "seed",
+    phase: "回归活动",
+    defaultDosage: "须经治疗师许可后再做：2-3 组 x 4-6 次（每周 1-2 次），下落全程控制 3-5 秒",
+    instructions: [
+      "跪在软垫上，躯干与大腿成一条直线，请同伴牢牢压住双侧脚踝（或用固定器）",
+      "保持髋部不折叠、臀部收紧，用大腿后侧的力量控制身体缓慢向前倒",
+      "尽量把「还能刹住」的角度往下延伸，感觉大腿后侧强烈拉紧",
+      "控制不住时双手撑地缓冲，再用手臂推起回到起始位（起身不靠腘绳肌）",
+      "初期只做很小的下落幅度，能全程控制多少就做多少，逐周增加",
+    ],
+    contraindications: [
+      "训练中疼痛超过 4/10 立即停止",
+      "这是高强度离心动作：腘绳肌拉伤未完全康复、或 ACL 自体腘绳肌腱重建术后早中期禁用，须经医生/治疗师许可",
+      "跪位膝前受压疼痛或膝关节屈曲受限者不做",
+      "训练后 48 小时内明显延迟性酸痛导致跛行，说明量过大，下次减半",
+    ],
+    progressionCriteria: [
+      "可在无痛下控制下落到水平位以下并保持动作不「折髋」",
+      "训练后 48 小时酸痛可耐受、不影响行走与既有跑步量",
+    ],
+    tags: ["膝盖", "腘绳肌", "离心", "进阶", "需治疗师许可"],
   },
 ];

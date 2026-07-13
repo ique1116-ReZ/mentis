@@ -188,7 +188,20 @@ export interface TrainingPlan {
   acceptedAt?: string;
 }
 
-export type RehabActionType = "stretch" | "strength" | "activation" | "mobility" | "balance";
+/**
+ * `plyometric`（跳跃/落地）与 `conditioning`（走跑/有氧）是回归活动阶段的独立模态：
+ * 没有它们，单腿跳只能勉强标成 balance、走跑交替只能标成 strength，
+ * 模型自述时对不上 → isLibraryActionMatch 失配 → 回落到未审核的 AI 生成动作卡，
+ * 而失配的恰恰是库里风险最高、最依赖回归标准把关的三个动作。
+ */
+export type RehabActionType =
+  | "stretch"
+  | "strength"
+  | "activation"
+  | "mobility"
+  | "balance"
+  | "plyometric"
+  | "conditioning";
 
 export interface ActionLibraryItem {
   id: string;

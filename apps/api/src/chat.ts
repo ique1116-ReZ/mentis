@@ -156,7 +156,7 @@ export function buildChatSystemPrompt(context: ChatContext = {}, messages: ChatM
     ].join("\n"),
     [
       "输出格式：只返回一个 JSON 对象，不要包裹代码块。",
-      'JSON 字段：{"content":"给用户看的回答","question":"下一步只问一个问题，可省略","options":[{"label":"按钮文案","value":"点击后发送给模型的完整回答"}],"recommendedActions":[{"actionId":"库里动作 id，可省略","title":"动作名","bodyRegion":"knee","actionType":"stretch|strength|activation|mobility|balance","targetMuscles":["腘绳肌"],"phase":"阶段","defaultDosage":"剂量","instructions":["步骤"],"contraindications":["停止条件"],"progressionCriteria":["进阶标准"],"tags":["标签"],"reason":"为什么推荐"}]}',
+      'JSON 字段：{"content":"给用户看的回答","question":"下一步只问一个问题，可省略","options":[{"label":"按钮文案","value":"点击后发送给模型的完整回答"}],"recommendedActions":[{"actionId":"库里动作 id，可省略","title":"动作名","bodyRegion":"knee","actionType":"stretch|strength|activation|mobility|balance|plyometric|conditioning","targetMuscles":["腘绳肌"],"phase":"阶段","defaultDosage":"剂量","instructions":["步骤"],"contraindications":["停止条件"],"progressionCriteria":["进阶标准"],"tags":["标签"],"reason":"为什么推荐"}]}',
       "如果不需要按钮，省略 question 和 options。",
       "如果推荐训练动作，必须放在 recommendedActions，不要只把动作写进 content 散文里。",
       "recommendedActions 里的动作必须和你在 content 里描述的动作完全一致。content 说拉伸大腿后侧，就不能推荐拉伸大腿前侧的动作。",
@@ -371,7 +371,9 @@ function normalizeActionType(value: string): RehabActionType | undefined {
     normalized === "strength" ||
     normalized === "activation" ||
     normalized === "mobility" ||
-    normalized === "balance"
+    normalized === "balance" ||
+    normalized === "plyometric" ||
+    normalized === "conditioning"
   ) {
     return normalized;
   }

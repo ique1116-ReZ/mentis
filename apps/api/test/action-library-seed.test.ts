@@ -31,6 +31,20 @@ describe("knee rehab seed library", () => {
     }
   });
 
+  it("prefixes every id with action_", () => {
+    for (const action of kneeRehabActionLibrary) {
+      expect(action.id, `${action.id} must start with action_`).toMatch(/^action_/);
+    }
+  });
+
+  it("gives every stretch a time-based dosage — a stretch holding reps instead of seconds is the modality/dosage mismatch users complained about", () => {
+    const stretches = kneeRehabActionLibrary.filter((action) => action.actionType === "stretch");
+    expect(stretches.length).toBeGreaterThan(0);
+    for (const action of stretches) {
+      expect(action.defaultDosage, `${action.id} stretch dosage must be held in 秒`).toContain("秒");
+    }
+  });
+
   it("covers all five rehab phases", () => {
     const phases = new Set(kneeRehabActionLibrary.map((action) => action.phase));
     expect(phases).toEqual(new Set(["镇痛与激活", "活动度与拉伸", "力量", "神经肌肉控制", "回归活动"]));
