@@ -393,7 +393,9 @@ export function App() {
         body: JSON.stringify({
           caseId: sendingCase.id,
           category: sendingCategory.id,
-          messages: nextMessages.slice(-8),
+          // 只发模型会消费的 role/content：recommendedActions（含 instructions、
+          // contraindications，一次最多 5 条）每轮全量回传纯属载荷膨胀，模型用不到。
+          messages: nextMessages.slice(-8).map(({ role, content }) => ({ role, content })),
         }),
       });
       if (!response.ok) {

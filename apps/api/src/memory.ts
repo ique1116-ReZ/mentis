@@ -63,13 +63,24 @@ export function rememberTrainingPlan(
   platform: PlatformDemo,
   userId: string,
   input: MemoryTrainingPlanInput,
+  today: Date = new Date(),
 ): UserMemory {
   const memory = getUserMemory(platform, userId);
   const now = new Date().toISOString();
+  const existingPlan = memory.trainingPlans.find((candidate) => candidate.id === input.id);
+
+  // 客户端（App.tsx rememberTrainingPlanForCurrentUser）POST 的是一个 CasePlan：没有
+  // completions 字段，completionPercent 恒为 0。直接 { ...input } 覆盖会把服务端累积的
+  // 打卡记录整段抹掉——病人在聊天里点一次「加入今日计划」，最多 30 天的完成历史就没了，
+  // 下一轮 prompt 还会告诉模型「最近 7 天完成训练 0 天」。缺字段时一律沿用同 id 旧计划的记录。
+  const completions = input.completions ?? existingPlan?.completions;
   const nextPlan: MemoryTrainingPlan = {
     ...input,
+    ...(completions ? { completions } : {}),
     updatedAt: input.updatedAt || now,
   };
+  // 完成度只从服务端的 completions 推导，不信客户端传来的数字。
+  nextPlan.completionPercent = completionPercentForDate(nextPlan, dateKey(today));
 
   memory.trainingPlans = [
     nextPlan,
@@ -108,11 +119,15 @@ function summarizeClinicalMemory(cases: MemoryCaseSummary[]): string {
   return truncateForMemory(summaries.join("；"), 320);
 }
 
+/**
+ * 只描述计划本身，不烘焙依从性。依从性是随时间腐烂的量：写入时算一次、之后原样存着，
+ * 病人停练三周后 prompt 里还写着「最近 7 天完成训练 5 天」，模型据此继续加量。
+ * 依从性改由 buildUserMemoryContext 在拼 prompt 时用 summarizeAdherence 现算。
+ */
 function summarizeActivePlans(plans: MemoryTrainingPlan[]): string {
   const activePlans = plans.filter((plan) => plan.status === "active").slice(0, 2);
   const summaries = activePlans.map((plan) => `${plan.title}，${plan.dayLabel}，动作：${summarizePlanItems(plan.items)}`);
-  const adherence = summarizeAdherence(plans);
-  return truncateForMemory([...summaries, adherence].filter(Boolean).join("；"), 320);
+  return truncateForMemory(summaries.join("；"), 320);
 }
 
 export function recordPlanCompletion(

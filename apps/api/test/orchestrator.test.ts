@@ -1760,6 +1760,12 @@ describe("chat action library prompt", () => {
     expect(prompt).toContain("1-5 个");
   });
 
+  it("tells the model to respect the patient's recovery stage and to ask before guessing", () => {
+    const prompt = buildChatSystemPrompt({ category: "knee", actionLibrary: library }, []);
+    expect(prompt).toContain("康复阶段");
+    expect(prompt).toContain("保守");
+  });
+
   it("parses actionType and targetMuscles out of the model response", () => {
     const result = buildGuidedChatResponse(
       [{ role: "user", content: "膝盖后方紧" }],

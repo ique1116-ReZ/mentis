@@ -1,17 +1,14 @@
 import type { ActionBodyPartFilter, RehabConsultCategory } from "./types";
 
+// 康复阶段是这套种子库真正带的轴：46 条全是 bodyRegion:"knee"，健身部位分类（胸/背/心肺…）
+// 迁移后 7 个筛选永远空、另 2 个匹配全部 46 条，对临床医生排计划毫无用处。改用 phase 分档。
 export const actionBodyPartFilters: ActionBodyPartFilter[] = [
   { id: "all", label: "全部" },
-  { id: "cardio", label: "心肺", tags: ["cardio", "cardiovascular system"] },
-  { id: "chest", label: "胸部", tags: ["chest", "pectorals"] },
-  { id: "back", label: "背部", bodyRegions: ["spine"], tags: ["back", "lats", "traps", "upper back", "lower back"] },
-  { id: "shoulders", label: "肩部", bodyRegions: ["shoulder"], tags: ["shoulders", "delts"] },
-  { id: "arms", label: "手臂", tags: ["upper arms", "lower arms", "biceps", "triceps", "forearms"] },
-  { id: "core", label: "核心", bodyRegions: ["spine"], tags: ["waist", "abs", "obliques"] },
-  { id: "glutes", label: "臀部", bodyRegions: ["hip"], tags: ["glutes", "abductors", "adductors"] },
-  { id: "quads", label: "股四头", bodyRegions: ["knee"], tags: ["quads"] },
-  { id: "hamstrings", label: "腘绳肌", bodyRegions: ["knee"], tags: ["hamstrings"] },
-  { id: "calves", label: "小腿", bodyRegions: ["ankle_foot"], tags: ["calves", "lower legs"] },
+  { id: "镇痛与激活", label: "镇痛与激活", phase: "镇痛与激活" },
+  { id: "活动度与拉伸", label: "活动度与拉伸", phase: "活动度与拉伸" },
+  { id: "力量", label: "力量", phase: "力量" },
+  { id: "神经肌肉控制", label: "神经肌肉控制", phase: "神经肌肉控制" },
+  { id: "回归活动", label: "回归活动", phase: "回归活动" },
 ];
 
 export const consultCategories: RehabConsultCategory[] = [

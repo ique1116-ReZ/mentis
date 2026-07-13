@@ -55,7 +55,6 @@ export function ClinicianDashboard({ session, onLogout }: { session: AuthSession
   const [savedTemplates, setSavedTemplates] = useState<ClinicianWorkoutTemplate[]>([]);
   const [actionFilter, setActionFilter] = useState("");
   const [selectedActionBodyPartFilter, setSelectedActionBodyPartFilter] = useState("all");
-  const [selectedActionPhaseFilter, setSelectedActionPhaseFilter] = useState("all");
   const [isBusy, setIsBusy] = useState(false);
   const streamRef = useRef<EventSource | null>(null);
 
@@ -252,7 +251,6 @@ export function ClinicianDashboard({ session, onLogout }: { session: AuthSession
   const legalHolidayMap = buildLegalHolidayMap(calendarViewDate.getFullYear());
   const calendarTitle = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long" }).format(calendarViewDate);
   const weekdayNames = ["日", "一", "二", "三", "四", "五", "六"];
-  const actionPhaseFilters = ["all", ...Array.from(new Set(actions.map((action) => action.phase))).sort((first, second) => first.localeCompare(second, "zh-CN"))];
   const selectedBodyPartFilter =
     actionBodyPartFilters.find((filter) => filter.id === selectedActionBodyPartFilter) ?? actionBodyPartFilters[0];
   const filteredActions = actions.filter((action) => {
@@ -266,8 +264,7 @@ export function ClinicianDashboard({ session, onLogout }: { session: AuthSession
     ].join(" ").toLowerCase();
     const matchesKeyword = !keyword || searchableText.includes(keyword);
     const matchesBodyPart = actionMatchesBodyPartFilter(action, selectedBodyPartFilter);
-    const matchesPhase = selectedActionPhaseFilter === "all" || action.phase === selectedActionPhaseFilter;
-    return matchesKeyword && matchesBodyPart && matchesPhase;
+    return matchesKeyword && matchesBodyPart;
   });
   const visibleActions = filteredActions.slice(0, 120);
   const hasMoreFilteredActions = filteredActions.length > visibleActions.length;
@@ -275,13 +272,6 @@ export function ClinicianDashboard({ session, onLogout }: { session: AuthSession
   function selectActionBodyPartFilter(filterId: string) {
     setSelectedActionBodyPartFilter(filterId);
     setActionFilter("");
-  }
-
-  function selectActionPhaseFilter(phase: string) {
-    setSelectedActionPhaseFilter(phase);
-    if (phase !== "all") {
-      setActionFilter("");
-    }
   }
 
   return (
@@ -650,7 +640,7 @@ export function ClinicianDashboard({ session, onLogout }: { session: AuthSession
               <span>{filteredActions.length} / {actions.length} 个</span>
             </div>
             <div className="action-filter-block">
-              <span>部位</span>
+              <span>阶段</span>
               <div className="body-part-filter-grid" role="list">
                 {actionBodyPartFilters.map((filter) => (
                   <button
@@ -664,16 +654,6 @@ export function ClinicianDashboard({ session, onLogout }: { session: AuthSession
                 ))}
               </div>
             </div>
-            <label className="action-filter-select">
-              分类
-              <select value={selectedActionPhaseFilter} onChange={(event) => selectActionPhaseFilter(event.target.value)}>
-                {actionPhaseFilters.map((phase) => (
-                  <option key={phase} value={phase}>
-                    {phase === "all" ? "全部分类" : phase}
-                  </option>
-                ))}
-              </select>
-            </label>
             <input
               className="library-search"
               placeholder="搜索动作、分类、器械或肌群"

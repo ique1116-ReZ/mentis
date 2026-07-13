@@ -97,6 +97,42 @@ describe("recommended action consistency", () => {
     expect(platform.actionLibrary).toHaveLength(1);
   });
 
+  it("does NOT substitute a same-title library entry whose type/muscles contradict the model (the second door)", () => {
+    // 同名但内容对不上：库里这条叫「坐姿腘绳肌拉伸」，实际却被标成股四头肌力量训练。
+    // 模型没填 actionId，靠 bodyRegion + 标题也不能把它顶替上来。
+    const mislabeledSameTitle: ActionLibraryItem = {
+      ...quadStretchItem,
+      id: "action_mislabeled",
+      title: "坐姿腘绳肌拉伸",
+      actionType: "strength",
+      targetMuscles: ["股四头肌"],
+      instructions: ["坐姿伸膝，负重抬起小腿"],
+    };
+    const platform = platformWith([mislabeledSameTitle]);
+
+    const [resolved] = resolveRecommendedActions(platform, [hamstringRecommendation()], "knee");
+
+    expect(resolved.actionId).not.toBe("action_mislabeled");
+    expect(resolved.actionType).toBe("stretch");
+    expect(resolved.targetMuscles).toEqual(["腘绳肌"]);
+    expect(resolved.instructions).toEqual(["坐在椅子边缘，患侧腿向前伸直"]);
+  });
+
+  it("still reuses a same-title library entry when its type and muscles agree", () => {
+    const matchingSameTitle: ActionLibraryItem = {
+      ...quadStretchItem,
+      id: "action_hs_seed",
+      title: "坐姿腘绳肌拉伸",
+      targetMuscles: ["腘绳肌"],
+    };
+    const platform = platformWith([matchingSameTitle]);
+
+    const [resolved] = resolveRecommendedActions(platform, [hamstringRecommendation()], "knee");
+
+    expect(resolved.actionId).toBe("action_hs_seed");
+    expect(platform.actionLibrary).toHaveLength(1);
+  });
+
   it("resolves several recommendations in one call", () => {
     const platform = platformWith([]);
     const resolved = resolveRecommendedActions(

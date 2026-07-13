@@ -1143,17 +1143,22 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
 
   // ---------------------------------------------------------------------------
   // 回归活动
+  //
+  // 这一阶段是跑、跳、回归运动：术后/急性期病人做了会直接出事，而模型在选动作时只看得到
+  // `id: 标题；类型；目标肌群；阶段；剂量` 这一行——contraindications 是选完之后才展示给病人的。
+  // 所以本阶段每一条都必须把放行条件写进标题和剂量里（seed 测试会逐条强制检查），
+  // 否则病人一句「什么时候能开始跑步」就能靠 TF-IDF 把走跑交替捞到候选列表第一位。
   // ---------------------------------------------------------------------------
   {
     id: "action_stair_descent",
-    title: "下台阶控制",
+    title: "下台阶控制（回归活动阶段，需治疗师许可）",
     bodyRegion: "knee",
     bodyRegions: ["knee"],
     actionType: "strength",
     targetMuscles: ["股四头肌"],
     source: "seed",
     phase: "回归活动",
-    defaultDosage: "3 组 x 10 级台阶，每级下落控制 2-3 秒",
+    defaultDosage: "须经治疗师许可后再做：3 组 x 10 级台阶，每级下落控制 2-3 秒",
     instructions: [
       "站在楼梯顶端，手轻扶栏杆（只作保护，不借力）",
       "患侧腿先下一级，用患侧的大腿前侧控制身体缓慢下降，落地时脚掌轻放不发出声响",
@@ -1173,14 +1178,15 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
   },
   {
     id: "action_walk_jog_intervals",
-    title: "走跑交替",
+    title: "走跑交替（回归跑步，需治疗师许可）",
     bodyRegion: "knee",
     bodyRegions: ["knee", "ankle_foot"],
     actionType: "conditioning",
     targetMuscles: ["股四头肌", "小腿三头肌"],
     source: "seed",
     phase: "回归活动",
-    defaultDosage: "跑 1 分钟 / 走 2 分钟 x 6-8 轮，隔天一次，总时长约 20-25 分钟",
+    defaultDosage:
+      "须经治疗师许可、且达到回归跑步标准（单腿提踵 20 次、单腿蹲无痛、无肿胀）后再做：跑 1 分钟 / 走 2 分钟 x 6-8 轮，隔天一次，总时长约 20-25 分钟",
     instructions: [
       "先做 5 分钟快走热身，确认无痛、无跛行再开始",
       "在平整路面上慢跑 1 分钟，步频略快、步幅小，落地轻、脚步声小",
@@ -1201,14 +1207,15 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
   },
   {
     id: "action_forward_hop",
-    title: "向前单腿跳",
+    title: "向前单腿跳（跳跃阶段，需治疗师许可）",
     bodyRegion: "knee",
     bodyRegions: ["knee", "ankle_foot"],
     actionType: "plyometric",
     targetMuscles: ["股四头肌", "小腿三头肌"],
     source: "seed",
     phase: "回归活动",
-    defaultDosage: "3 组 x 5 次（每侧），每次落地稳定 2 秒后再做下一次",
+    defaultDosage:
+      "须经治疗师许可、且关节无肿胀、患侧力量达健侧 80% 后再做：3 组 x 5 次（每侧），每次落地稳定 2 秒后再做下一次",
     instructions: [
       "患侧单腿站立，双臂自然摆动辅助发力，屈髋屈膝下蹲蓄力",
       "向前单腿跳出一个可控的距离（初期短一点，能稳稳落住为准）",
@@ -1229,14 +1236,15 @@ export const kneeRehabActionLibrary: ActionLibraryItem[] = [
   },
   {
     id: "action_lateral_hop",
-    title: "侧向单腿跳",
+    title: "侧向单腿跳（跳跃阶段，需治疗师许可）",
     bodyRegion: "knee",
     bodyRegions: ["knee", "hip"],
     actionType: "plyometric",
     targetMuscles: ["臀中肌", "股四头肌"],
     source: "seed",
     phase: "回归活动",
-    defaultDosage: "3 组 x 每侧 6-8 次，落地稳定 2 秒后再跳回",
+    defaultDosage:
+      "须经治疗师许可、且关节无肿胀、向前单腿跳已达标后再做：3 组 x 每侧 6-8 次，落地稳定 2 秒后再跳回",
     instructions: [
       "地面上放一条胶带或一根低矮标志线，患侧单腿站在线的一侧",
       "向侧方跳过线，用同一条腿落地，前脚掌先着地并屈膝缓冲",

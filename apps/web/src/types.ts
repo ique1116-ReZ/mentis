@@ -229,6 +229,7 @@ export type ActionLibraryItem = {
   id: string;
   title: string;
   bodyRegion: ActionBodyRegion;
+  bodyRegions?: ActionBodyRegion[];
   phase: string;
   defaultDosage: string;
   instructions: string[];
@@ -242,8 +243,8 @@ export type ActionBodyRegion = "knee" | "ankle_foot" | "hip" | "spine" | "should
 export type ActionBodyPartFilter = {
   id: string;
   label: string;
+  phase?: string;
   bodyRegions?: ActionBodyRegion[];
-  tags?: string[];
 };
 
 export type ClinicianWorkoutItem = {

@@ -463,7 +463,10 @@ export function resolveRecommendedActions(
         candidate.bodyRegion === bodyRegion &&
         normalizeComparableText(candidate.title) === normalizeComparableText(action.title),
     );
-    if (existingByTitle) {
+    // 标题命中也要过同一道校验：否则「用库里的条目覆盖模型自己写对的动作」这个机制
+    // 只是换了把钥匙又开了一次门（库里同名条目被标错类型/肌群时尤其致命）。
+    // 校验不过就当没命中，往下走：存模型自己那条。
+    if (existingByTitle && isLibraryActionMatch(action, existingByTitle)) {
       return actionFromLibraryItem(existingByTitle, action.reason);
     }
 

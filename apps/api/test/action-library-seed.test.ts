@@ -90,6 +90,31 @@ describe("knee rehab seed library", () => {
     expect(nordic?.defaultDosage.startsWith("须经治疗师许可后再做：")).toBe(true);
   });
 
+  it("gates EVERY 回归活动 entry — a structural rule a future return-to-sport action cannot silently violate", () => {
+    // 回归活动 = 跑跳、回归运动。术后两周的病人问「什么时候能跑步」时，TF-IDF 会把
+    // 走跑交替顶到候选列表第一位；prompt 里只看得到 `标题；类型；肌群；阶段；剂量`。
+    // 所以这一阶段的每一条都必须在标题或剂量里带上放行条件，靠 id 白名单挡不住新增动作。
+    const gateSignal = /许可|禁用|负重限制/;
+    const returnToSport = kneeRehabActionLibrary.filter((action) => action.phase === "回归活动");
+    expect(returnToSport.length).toBeGreaterThanOrEqual(5);
+    for (const action of returnToSport) {
+      const signaled = gateSignal.test(action.title) || gateSignal.test(action.defaultDosage);
+      expect(
+        signaled,
+        `${action.id}（回归活动）没有放行门槛：标题和剂量里都没有许可/禁用/负重限制的信号`,
+      ).toBe(true);
+    }
+  });
+
+  it("renders the clearance gate for the return-to-sport actions into the prompt line the model reads", () => {
+    for (const action of kneeRehabActionLibrary.filter((entry) => entry.phase === "回归活动")) {
+      const rendered = formatActionLibraryContext([action], [], undefined);
+      const line = rendered.split("\n").find((entry) => entry.startsWith(`- ${action.id}:`));
+      expect(line, `${action.id} did not render a prompt line`).toBeDefined();
+      expect(/许可|禁用|负重限制/.test(line!), `${action.id}'s rendered prompt line lost its gate: ${line}`).toBe(true);
+    }
+  });
+
   it("keeps every deliberately-gated action's clearance signal in title or defaultDosage — the only fields visible at selection time", () => {
     const gateSignal = /许可|禁用|负重限制/;
     for (const id of GATED_ACTION_IDS) {

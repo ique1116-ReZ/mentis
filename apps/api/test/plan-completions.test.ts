@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { completionPercentForDate } from "@mentis/domain";
+import { completionPercentForDate, dateKey } from "@mentis/domain";
 import {
+  buildChatSystemPrompt,
   createPlatformDemo,
   recordPlanCompletion,
   rememberCase,
@@ -9,17 +10,10 @@ import {
 } from "../src/index";
 import type { MemoryTrainingPlan, MemoryTrainingPlanInput, PlatformDemo } from "../src/index";
 
-function seedPlan(platform: PlatformDemo): MemoryTrainingPlan {
-  rememberCase(platform, "user_1", {
-    id: "case_1",
-    categoryId: "knee",
-    title: "下楼梯膝盖疼",
-    summary: "下楼梯膝盖疼",
-    status: "咨询中",
-    createdAt: new Date().toISOString(),
-  });
-
-  const input: MemoryTrainingPlanInput = {
+// 客户端（App.tsx rememberTrainingPlanForCurrentUser）POST 的是一个 CasePlan：
+// 没有 completions 字段，completionPercent 恒为 0。这就是服务端必须承受的输入形状。
+function planInputAsClientPosts(overrides: Partial<MemoryTrainingPlanInput> = {}): MemoryTrainingPlanInput {
+  return {
     id: "plan_1",
     caseId: "case_1",
     categoryId: "knee",
@@ -32,9 +26,26 @@ function seedPlan(platform: PlatformDemo): MemoryTrainingPlan {
       { title: "坐姿腘绳肌拉伸", meta: "3 组 x 30 秒", state: "todo" },
     ],
     stage: { name: "镇痛与激活", progressLabel: "第 1 天", progressPercent: 0, goals: ["无痛完成"] },
+    ...overrides,
   };
-  const memory = rememberTrainingPlan(platform, "user_1", input);
+}
+
+function seedPlan(platform: PlatformDemo, today?: Date): MemoryTrainingPlan {
+  rememberCase(platform, "user_1", {
+    id: "case_1",
+    categoryId: "knee",
+    title: "下楼梯膝盖疼",
+    summary: "下楼梯膝盖疼",
+    status: "咨询中",
+    createdAt: new Date().toISOString(),
+  });
+
+  const memory = rememberTrainingPlan(platform, "user_1", planInputAsClientPosts(), today);
   return memory.trainingPlans[0];
+}
+
+function daysAgo(days: number): Date {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 }
 
 describe("plan completions", () => {
@@ -117,5 +128,89 @@ describe("plan completions", () => {
 
     const plans = platform.userMemories.user_1.trainingPlans;
     expect(summarizeAdherence(plans, new Date("2026-07-12T10:00:00.000Z"))).toBe("最近 7 天完成训练 2 天");
+  });
+});
+
+describe("re-saving a plan the way the client does", () => {
+  const today = new Date("2026-07-12T10:00:00.000Z");
+
+  it("keeps the check-off history when the incoming plan omits completions (聊天里点「加入今日计划」不能抹掉打卡)", () => {
+    const platform = createPlatformDemo();
+    seedPlan(platform, today);
+    recordPlanCompletion(platform, "user_1", "plan_1", "action_quad_iso", true, today);
+
+    // 客户端把动作加进计划后重新 POST 整个 CasePlan：没有 completions、completionPercent 是 0。
+    const memory = rememberTrainingPlan(
+      platform,
+      "user_1",
+      planInputAsClientPosts({
+        items: [
+          { actionId: "action_quad_iso", title: "股四头肌等长收缩", meta: "3 组 x 30 秒", state: "todo" },
+          { title: "坐姿腘绳肌拉伸", meta: "3 组 x 30 秒", state: "todo" },
+        ],
+      }),
+      today,
+    );
+
+    const plan = memory.trainingPlans[0];
+    expect(plan.completions).toEqual([{ date: "2026-07-12", doneKeys: ["action_quad_iso"] }]);
+    expect(summarizeAdherence(memory.trainingPlans, today)).toBe("最近 7 天完成训练 1 天");
+  });
+
+  it("recomputes completionPercent from the server-side completions instead of trusting the client's 0", () => {
+    const platform = createPlatformDemo();
+    seedPlan(platform, today);
+    recordPlanCompletion(platform, "user_1", "plan_1", "action_quad_iso", true, today);
+
+    const memory = rememberTrainingPlan(platform, "user_1", planInputAsClientPosts(), today);
+
+    expect(memory.trainingPlans[0].completionPercent).toBe(50);
+  });
+
+  it("still accepts an explicit completions list when one is supplied", () => {
+    const platform = createPlatformDemo();
+    seedPlan(platform, today);
+    recordPlanCompletion(platform, "user_1", "plan_1", "action_quad_iso", true, today);
+
+    const memory = rememberTrainingPlan(
+      platform,
+      "user_1",
+      planInputAsClientPosts({ completions: [{ date: "2026-07-11", doneKeys: ["action_quad_iso"] }] }),
+      today,
+    );
+
+    expect(memory.trainingPlans[0].completions).toEqual([{ date: "2026-07-11", doneKeys: ["action_quad_iso"] }]);
+    expect(memory.trainingPlans[0].completionPercent).toBe(0);
+  });
+});
+
+describe("adherence freshness in the prompt", () => {
+  it("reports 0 days for a patient whose last completion was 21 days ago, not the stale count stored at write time", () => {
+    const platform = createPlatformDemo();
+    seedPlan(platform);
+
+    // 三周前连续训练 5 天，之后彻底停练。
+    for (let dayOffset = 21; dayOffset < 26; dayOffset += 1) {
+      recordPlanCompletion(platform, "user_1", "plan_1", "action_quad_iso", true, daysAgo(dayOffset));
+    }
+    const memory = platform.userMemories.user_1;
+    expect(memory.trainingPlans[0].completions?.some((entry) => entry.date === dateKey(daysAgo(21)))).toBe(true);
+
+    const prompt = buildChatSystemPrompt({ category: "knee", userMemory: memory });
+
+    expect(prompt).toContain("最近 7 天完成训练 0 天");
+    expect(prompt).not.toContain("最近 7 天完成训练 5 天");
+    // 存下来的摘要里不能再烘焙依从性句子，否则它一被写入就开始腐烂。
+    expect(memory.activePlanSummary).not.toContain("最近 7 天完成训练");
+  });
+
+  it("counts a completion made today, so the fresh path is not just always zero", () => {
+    const platform = createPlatformDemo();
+    seedPlan(platform);
+    recordPlanCompletion(platform, "user_1", "plan_1", "action_quad_iso", true, new Date());
+
+    const prompt = buildChatSystemPrompt({ category: "knee", userMemory: platform.userMemories.user_1 });
+
+    expect(prompt).toContain("最近 7 天完成训练 1 天");
   });
 });

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, parse, resolve } from "node:path";
 import { REHAB_CONSULT_CATEGORIES } from "./platform.js";
 import { sanitizeActionText, truncateForMemory } from "./helpers.js";
+import { summarizeAdherence } from "./memory.js";
 import { buildChatRagContext } from "./rag.js";
 import { rankActionsForChat } from "./action-retrieval.js";
 import type {
@@ -160,6 +161,7 @@ export function buildChatSystemPrompt(context: ChatContext = {}, messages: ChatM
       "如果不需要按钮，省略 question 和 options。",
       "如果推荐训练动作，必须放在 recommendedActions，不要只把动作写进 content 散文里。",
       "recommendedActions 里的动作必须和你在 content 里描述的动作完全一致。content 说拉伸大腿后侧，就不能推荐拉伸大腿前侧的动作。",
+      "只推荐与患者当前康复阶段匹配的动作（阶段见动作库每行的「阶段」字段）：如果患者的康复阶段不清楚，先问清楚（术后/受伤多久、当前能做什么），并按更保守的阶段处理，不要推荐跑跳或回归活动类动作。",
       "actionType 和 targetMuscles 必填，它们要如实描述你推荐的这个动作。",
       "关于 actionId：只有当动作库里某个动作【就是】你要推荐的那个动作时，才填它的 actionId。哪怕只是部位相近、名字相似，也不要填——直接生成新动作，把字段填完整即可。填错 actionId 比不填更糟。",
       "一次推荐 1-5 个动作，具体几个由你根据用户情况判断，不用凑数也不用只给一个。",
@@ -174,17 +176,21 @@ export function buildChatSystemPrompt(context: ChatContext = {}, messages: ChatM
   ].join("\n\n");
 }
 
-export function buildUserMemoryContext(memory?: UserMemory): string {
+export function buildUserMemoryContext(memory?: UserMemory, today: Date = new Date()): string {
   if (!memory) {
     return "用户记忆摘要：暂无。";
   }
 
   const profileSummary = memory.profileSummary || memory.notes.slice(0, 2).join("；");
+  // 依从性现算：存在 activePlanSummary 里的那句话是写入时的快照，会随时间腐烂。
+  const adherence =
+    memory.trainingPlans.length > 0 ? summarizeAdherence(memory.trainingPlans, today) : "";
   const sections = [
     "用户记忆摘要（压缩版，仅供个性化问诊使用，不代表诊断）：",
     profileSummary ? `画像：${truncateForMemory(profileSummary, 220)}` : "",
     memory.clinicalSummary ? `康复摘要：${truncateForMemory(memory.clinicalSummary, 320)}` : "",
     memory.activePlanSummary ? `当前计划：${truncateForMemory(memory.activePlanSummary, 320)}` : "",
+    adherence ? `训练依从性：${adherence}` : "",
     ...(memory.recentEvents ?? [])
       .slice()
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))

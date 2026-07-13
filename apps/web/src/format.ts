@@ -136,10 +136,7 @@ export function actionBodyRegionLabel(region: ActionBodyRegion) {
 }
 
 export function actionLibraryMetaLine(action: ActionLibraryItem) {
-  const priorityTags = (action.tags ?? [])
-    .filter((tag) => tag !== "exercise-library")
-    .slice(0, 4)
-    .join(" / ");
+  const priorityTags = (action.tags ?? []).slice(0, 4).join(" / ");
   return priorityTags ? `${actionBodyRegionLabel(action.bodyRegion)} · ${priorityTags}` : actionBodyRegionLabel(action.bodyRegion);
 }
 
@@ -147,9 +144,13 @@ export function actionMatchesBodyPartFilter(action: ActionLibraryItem, filter: A
   if (filter.id === "all") {
     return true;
   }
-  if (filter.bodyRegions?.includes(action.bodyRegion)) {
-    return true;
+  if (filter.phase) {
+    return action.phase === filter.phase;
   }
-  const normalizedActionTags = new Set((action.tags ?? []).map((tag) => tag.toLowerCase()));
-  return filter.tags?.some((tag) => normalizedActionTags.has(tag.toLowerCase())) ?? false;
+  // 部位匹配读 bodyRegions（回退到单值 bodyRegion）：一个动作可以横跨膝/踝/髋。
+  if (filter.bodyRegions) {
+    const regions = action.bodyRegions ?? [action.bodyRegion];
+    return filter.bodyRegions.some((region) => regions.includes(region));
+  }
+  return false;
 }
