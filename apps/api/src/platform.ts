@@ -1,6 +1,6 @@
 import type { ActionLibraryItem, ClinicianAvailabilitySlot } from "@mentis/domain";
 import { hashPassword } from "./helpers.js";
-import { importedExerciseLibrary } from "./exercise-library.generated.js";
+import { kneeRehabActionLibrary } from "./action-library.seed.js";
 import type {
   DemoCredential,
   PlatformDemo,
@@ -159,32 +159,7 @@ function buildSeedAvailabilitySlots(clinicianId: string): ClinicianAvailabilityS
 }
 
 function buildSeedActionLibrary(): ActionLibraryItem[] {
-  const rehabSeedActions: ActionLibraryItem[] = [
-    {
-      id: "action_quad_iso",
-      title: "股四头肌等长收缩",
-      bodyRegion: "knee",
-      phase: "镇痛与激活",
-      defaultDosage: "3 组 x 30 秒",
-      instructions: ["坐位或仰卧位伸直膝盖", "轻轻绷紧大腿前侧", "保持呼吸，不要憋气"],
-      contraindications: ["训练中疼痛明显加重", "术后限制未确认"],
-      progressionCriteria: ["完成后 24 小时无明显加重"],
-      tags: ["膝盖", "等长", "低刺激"],
-    },
-    {
-      id: "action_wall_sit",
-      title: "靠墙静蹲",
-      bodyRegion: "knee",
-      phase: "负荷控制",
-      defaultDosage: "4 组 x 20 秒",
-      instructions: ["背靠墙缓慢下蹲到可耐受角度", "膝盖对齐脚尖", "保持疼痛不超过 3/10"],
-      contraindications: ["明显肿胀", "无法承重", "急性外伤后未评估"],
-      progressionCriteria: ["可完成 4 组且次日无加重"],
-      tags: ["膝盖", "股四头肌", "静态"],
-    },
-  ];
-
-  return [...rehabSeedActions, ...importedExerciseLibrary];
+  return kneeRehabActionLibrary;
 }
 
 function getDemoCredentials(): DemoCredential[] {

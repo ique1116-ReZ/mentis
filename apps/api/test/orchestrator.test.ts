@@ -84,6 +84,16 @@ describe("business API orchestration", () => {
       "urgent_referral_triggered",
     ]);
   });
+
+  it("exposes the knee rehab action library", () => {
+    const platform = createPlatformDemo();
+    const library = listActionLibrary(platform);
+
+    expect(library.length).toBeGreaterThan(40);
+    expect(library.every((action) => action.source === "seed")).toBe(true);
+    expect(library.some((action) => action.id === "action_seated_hamstring_stretch")).toBe(true);
+    expect(library.some((action) => action.id.startsWith("exercise_"))).toBe(false);
+  });
 });
 
 describe("auth and registration", () => {
@@ -750,9 +760,11 @@ describe("consultation orchestration", () => {
     expect(snapshot.plans.find((candidate) => candidate.id === "plan_ai_existing")?.source).toBe("ai_generated");
     expect(snapshot.plans.find((candidate) => candidate.id === plan.id)?.source).toBe("clinician_custom");
     expect(snapshot.messages.some((message) => message.kind === "plan_offer")).toBe(true);
-    expect(snapshot.actionLibrary.length).toBeGreaterThanOrEqual(1114);
+    expect(snapshot.actionLibrary.length).toBeGreaterThan(40);
+    expect(snapshot.actionLibrary.every((action) => action.source === "seed")).toBe(true);
     expect(snapshot.actionLibrary.some((action) => action.id === "action_quad_iso")).toBe(true);
-    expect(snapshot.actionLibrary.some((action) => action.id.startsWith("exercise_"))).toBe(true);
+    expect(snapshot.actionLibrary.some((action) => action.id === "action_seated_hamstring_stretch")).toBe(true);
+    expect(snapshot.actionLibrary.some((action) => action.id.startsWith("exercise_"))).toBe(false);
   });
 
   it("denies plan offers before activation and from pending clinicians", () => {

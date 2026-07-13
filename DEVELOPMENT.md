@@ -64,7 +64,7 @@ Mentis AI Agent/
   - `storage.ts` — 状态持久化（见 3.2）
   - `helpers.ts` — 密码散列、错误构造（`badRequest/unauthorized/...`）、工具
   - `types.ts` — API 层类型
-  - `exercise-library.generated.ts` — ⚠️ 1.2MB 生成文件，动作库种子数据，别手改
+  - `action-library.seed.ts` — 手写的膝关节康复动作种子库（46 条）。改动作内容直接改这里。
 
 ### 3.2 状态与持久化
 - 运行时全部状态在内存里的一个 `PlatformDemo` 对象（users / clinicians / consultations / userMemories / trainingPlans / auditEvents 等）。**没有数据库。**
@@ -165,7 +165,7 @@ git push origin main    # 触发 .github/workflows/deploy-web.yml，build @menti
 
 ## 7. 约定 / 坑
 
-- **动作库数据源**是生成文件 `exercise-library.generated.ts`，别手改；改动作内容走生成流程。
+- **动作库数据源**是手写的 `action-library.seed.ts`。原来那份 1112 条健身动作的生成文件已删除（生成脚本本就不在仓库里，删了不损失任何可恢复的东西）。AI 现场生成的动作会以 `source: "ai"` 落库积累。
 - **ai-service（Python）是死代码**，只剩 pyc，无引用。AI 全在 `apps/api/chat.ts`，别被误导。
 - **RAG 当前只对膝盖生效**，且没配 `MENTIS_RAG_INDEX_PATH` 就静默禁用。
 - 后端无数据库，全靠单个 JSON 文件持久化——涉及数据结构变更时注意 `storage.ts` 的种子/磁盘合并策略。
