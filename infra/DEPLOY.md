@@ -110,3 +110,65 @@ After `systemctl edit`/editing the drop-in file, run `sudo systemctl daemon-relo
 2. An unauthenticated request to a protected route → `401`, not `200` (auth didn't regress).
 3. `curl -s -o /dev/null -w '%{http_code}\n' https://aimentis.site/` → `200`, and the served JS bundle filename changed.
 4. `ssh ... "sudo systemctl status mentis-api --no-pager"` shows `active (running)` with a **recent** start time (confirms it actually restarted, not that the old process silently kept running).
+
+## 一次性迁移：清理健身动作库（2026-07）
+
+动作库从 1112 条导入的健身动作换成了手写的膝关节康复库（见
+`apps/api/src/action-library.seed.ts`）。但 `storage.ts` 的 `hydrateFromDisk`
+对 `actionLibrary` 用的是「种子 ∪ 磁盘上种子没有的条目」这种增量合并策略——
+只删代码里的 1112 条不够，它们还躺在生产的 `platform-state.json` 里，下次
+重启会被原样并回内存。必须单独跑一次 `scripts/purge-fitness-library.mjs`
+清理数据文件，这是一次性操作，不需要每次部署都跑。
+
+删除判据是 `tags` 数组包含 `"exercise-library"`（当年生成脚本给每条导入动作
+打的第一个 tag）。模型在真实问诊里生成并存下来的动作（`source: "ai"`）、
+以及没有这个 tag 的条目都会保留，不受影响。已有用户的训练计划也不受影响：
+计划里每个 item 自带 `title` / `instructions` 快照，不是对动作库的引用。
+
+**先在本地/副本上验证过（dry-run 数字、`--apply` 后计划条数不变、备份文件
+完整）才动生产数据。** 跑的具体时机——是否再手动备份一份到 iCloud、要不要
+挑夜间窗口——由人确认，不要自己拍板。
+
+在服务器上（`releases/*` 里已经有最新代码之后再做，不需要额外部署一次）：
+
+1. 停服务：
+   ```bash
+   ssh -i /Users/rez/Documents/claw.pem ubuntu@43.167.196.40 "sudo systemctl stop mentis-api"
+   ```
+2. dry-run，看看会删多少（不改任何文件）：
+   ```bash
+   ssh -i /Users/rez/Documents/claw.pem ubuntu@43.167.196.40 "
+     node /opt/mentis-rehab-platform/current/scripts/purge-fitness-library.mjs \
+       /opt/mentis-rehab-platform/data/platform-state.json
+   "
+   ```
+3. 核对打印出来的数字：删除数应该在 1112 附近，`source=ai` 的条目数应该 > 0
+   （如果生产已经跑了一段时间、模型生成过动作的话）且这批不在删除范围内。
+   数字不对就停下来，不要往下走。
+4. 确认无误后加 `--apply`（脚本会自动先把原文件备份成
+   `platform-state.json.bak-<ISO时间戳>`，再写回瘦身后的数据）：
+   ```bash
+   ssh -i /Users/rez/Documents/claw.pem ubuntu@43.167.196.40 "
+     node /opt/mentis-rehab-platform/current/scripts/purge-fitness-library.mjs \
+       /opt/mentis-rehab-platform/data/platform-state.json --apply
+   "
+   ```
+5. 起服务：
+   ```bash
+   ssh -i /Users/rez/Documents/claw.pem ubuntu@43.167.196.40 "sudo systemctl restart mentis-api"
+   ```
+6. 自检：
+   ```bash
+   curl -s https://api.aimentis.site/health   # 期望 {"ok":true,...}
+   ```
+   再登录一个账号，`GET /v1/action-library` 应该只剩康复动作，没有
+   `exercise_` 开头的 id 了。
+
+**回滚**：出问题就把备份文件盖回原文件名，再重启服务，不需要重新部署代码。
+```bash
+ssh -i /Users/rez/Documents/claw.pem ubuntu@43.167.196.40 "
+  sudo -u mentis cp /opt/mentis-rehab-platform/data/platform-state.json.bak-<时间戳> \
+    /opt/mentis-rehab-platform/data/platform-state.json
+  sudo systemctl restart mentis-api
+"
+```
