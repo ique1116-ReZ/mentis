@@ -77,7 +77,16 @@ export function App() {
   // 任何异步响应（打勾的 POST，也包括 refreshMemoryForCurrentUser 的 GET）落地前
   // 都要先比对这个计数器是否还是发起时的值，不是的话说明期间又有更新的打勾发生，
   // 这份响应就是过期快照，绝不能用它整体覆盖 session/localStorage。
+  //
+  // 但世代计数器只能感知"是否有更新的写请求"，感知不到"这份响应到底属不属于当前登录
+  // 的用户"。同一台设备上 A 退出、B 登录后，如果 B 还没做过任何受守护的写操作，计数器
+  // 不会推进——A 那份姗姗来迟的响应会通过世代校验，把 A 的 memory 灌进 B 的 session 和
+  // localStorage。所以还需要一个"当前会话真正归属于谁"的镜像：每个受守护的写操作在响应
+  // 落地后，除了比对世代计数器，还要比对发起写操作时捕获的 userId 是否等于
+  // currentUserIdRef.current，任一不符都视为过期响应、直接丢弃。这个 ref 在
+  // login/register/logout 以及应用启动时的会话恢复里同步更新，绝不依赖 effect 的下一轮渲染。
   const memoryWriteGenerationRef = useRef(0);
+  const currentUserIdRef = useRef<string | null>(null);
   const activeCase = cases.find((patientCase) => patientCase.id === activeCaseId) ?? null;
   const selectedCategory = activeCase ? consultCategories.find((category) => category.id === activeCase.categoryId) ?? null : null;
   const messages = activeCase?.messages ?? [];
@@ -118,6 +127,7 @@ export function App() {
       }
 
       const hydratedCases = validSession.user.role === "user" ? hydrateCasesFromMemory(validSession.memory) : [];
+      currentUserIdRef.current = validSession.user.id;
       setSession(validSession);
       setCases(hydratedCases);
       setActiveCaseId(hydratedCases[0]?.id ?? null);
@@ -450,6 +460,10 @@ export function App() {
 
     const nextSession = (await response.json()) as AuthSession;
     const hydratedCases = hydrateCasesFromMemory(nextSession.memory);
+    // 切换登录身份：重置世代计数器并让 currentUserIdRef 立刻指向新用户，防止上一个
+    // 用户任何还在飞行中的受守护写响应，落地后被误判成"属于当前会话"。
+    memoryWriteGenerationRef.current = 0;
+    currentUserIdRef.current = nextSession.user.id;
     setSession(nextSession);
     storeSession(nextSession);
     setCases(hydratedCases);
@@ -468,6 +482,9 @@ export function App() {
     }
 
     const nextSession = (await response.json()) as AuthSession;
+    // 同 login：新注册的账号切换了会话身份，重置世代计数器并同步 currentUserIdRef。
+    memoryWriteGenerationRef.current = 0;
+    currentUserIdRef.current = nextSession.user.id;
     setSession(nextSession);
     storeSession(nextSession);
     setCases([]);
@@ -478,6 +495,11 @@ export function App() {
 
   function logout() {
     consultationStreamRef.current?.close();
+    // 退出登录也是身份切换：重置世代计数器，并把 currentUserIdRef 清空，让任何还在飞行中的
+    // 受守护写响应（无论走的是哪个分支）落地后都无法通过身份校验，不会把旧用户的数据
+    // 灌回一个已经没有登录用户的会话里。
+    memoryWriteGenerationRef.current = 0;
+    currentUserIdRef.current = null;
     setSession(null);
     storeSession(null);
     setCases([]);
@@ -688,15 +710,18 @@ export function App() {
       return;
     }
 
-    // 在发起 GET 之前先记下当前世代。这次刷新可能是打勾失败后触发的重新同步，
-    // 而它的 await 期间用户完全可能又打了一次新的勾——那次打勾会推进世代计数器，
+    // 在发起 GET 之前先记下当前世代和发起时的用户身份。这次刷新可能是打勾失败后触发的
+    // 重新同步，而它的 await 期间用户完全可能又打了一次新的勾——那次打勾会推进世代计数器，
     // 并带着自己的乐观更新/成功响应。等这份 GET 落地时如果世代已经变了，说明
     // 它反映的是比新打勾更旧的服务端快照，绝不能整体覆盖 session，否则会把
-    // 新打勾从界面和 localStorage 里冲掉。
+    // 新打勾从界面和 localStorage 里冲掉。同样，await 期间也完全可能发生退出登录/切换账号，
+    // 这时哪怕世代没变，这份 GET 也已经不属于当前会话了，必须用 currentUserIdRef 再校验一次
+    // 归属，否则旧用户的 memory 会被写进新会话。
     const generation = memoryWriteGenerationRef.current;
+    const userId = session.user.id;
 
     try {
-      const response = await fetch(`${API_BASE}/v1/users/${encodeURIComponent(session.user.id)}/memory`, {
+      const response = await fetch(`${API_BASE}/v1/users/${encodeURIComponent(userId)}/memory`, {
         headers: {
           Authorization: `Bearer ${session.token}`,
         },
@@ -705,8 +730,9 @@ export function App() {
         return;
       }
       const memory = (await response.json()) as UserMemory;
-      if (generation !== memoryWriteGenerationRef.current) {
-        // 期间已经有更新的打勾发生，丢弃这份过期快照，不写 session 也不写 storage。
+      if (generation !== memoryWriteGenerationRef.current || currentUserIdRef.current !== userId) {
+        // 期间已经有更新的打勾发生，或者当前会话已经不属于发起请求时的那个用户了，
+        // 丢弃这份过期/错位快照，不写 session 也不写 storage。
         return;
       }
       setSession((prev) => {
@@ -808,6 +834,13 @@ export function App() {
     }
   }
 
+  // 四个受守护写操作共用的小工具，避免同一段"过期校验"逻辑在四处重复、走样。
+  // 一次性判断"世代过期"或"归属用户变了"两种情况（定义处见
+  // memoryWriteGenerationRef/currentUserIdRef 顶部注释）。
+  function isGuardedMemoryWriteStale(requestId: number, userId: string) {
+    return requestId !== memoryWriteGenerationRef.current || currentUserIdRef.current !== userId;
+  }
+
   async function rememberCaseForCurrentUser(patientCase: PatientCase) {
     if (!session) {
       return;
@@ -817,7 +850,9 @@ export function App() {
     // await 期间用户完全可能打了一次新的勾，那次打勾会推进世代计数器并带着自己的
     // 乐观更新/成功响应。等这份"记住病例"响应落地时如果世代已经变了，说明它反映的
     // 是比新打勾更旧的服务端快照，绝不能用它整体覆盖 session，否则会把新打勾从
-    // 界面和 localStorage 里冲掉。
+    // 界面和 localStorage 里冲掉。同理，await 期间也可能发生退出登录/切换账号，
+    // 哪怕世代没变也不能把这份响应写进当前会话——isGuardedMemoryWriteStale 会
+    // 一并校验这两种情况。
     const requestId = ++memoryWriteGenerationRef.current;
     const userId = session.user.id;
     const token = session.token;
@@ -841,8 +876,9 @@ export function App() {
 
       if (response.ok) {
         const memory = (await response.json()) as UserMemory;
-        if (requestId !== memoryWriteGenerationRef.current) {
-          // 期间已经有更新的打勾发生，丢弃这份过期快照，不写 session 也不写 storage。
+        if (isGuardedMemoryWriteStale(requestId, userId)) {
+          // 期间已经有更新的写操作发生，或者当前会话已经不属于发起请求的那个用户了，
+          // 丢弃这份过期/错位快照，不写 session 也不写 storage。
           return;
         }
         setSession((prev) => {
@@ -869,8 +905,9 @@ export function App() {
       setActiveCaseId(null);
     }
 
-    // 同上：与 togglePlanItem 共用世代计数器，防止删除病例的响应在打勾之后落地时
-    // 把打勾覆盖掉。
+    // 同上：与 togglePlanItem 共用世代计数器和 currentUserIdRef 身份校验（定义处见
+    // memoryWriteGenerationRef 顶部注释），防止删除病例的响应在打勾之后落地时把打勾
+    // 覆盖掉，也防止响应落地时账号已经切换。
     const requestId = ++memoryWriteGenerationRef.current;
     const userId = session.user.id;
     const token = session.token;
@@ -888,7 +925,7 @@ export function App() {
 
       if (response.ok) {
         const memory = (await response.json()) as UserMemory;
-        if (requestId !== memoryWriteGenerationRef.current) {
+        if (isGuardedMemoryWriteStale(requestId, userId)) {
           return;
         }
         setSession((prev) => {
@@ -910,8 +947,9 @@ export function App() {
       return;
     }
 
-    // 同上：与 togglePlanItem 共用世代计数器，防止"接受计划"的响应在打勾之后
-    // 落地时把打勾覆盖掉。
+    // 同上：与 togglePlanItem 共用世代计数器和 currentUserIdRef 身份校验（定义处见
+    // memoryWriteGenerationRef 顶部注释），防止"接受计划"的响应在打勾之后落地时把
+    // 打勾覆盖掉，也防止响应落地时账号已经切换。
     const requestId = ++memoryWriteGenerationRef.current;
     const userId = session.user.id;
     const token = session.token;
@@ -937,7 +975,7 @@ export function App() {
 
       if (response.ok) {
         const memory = (await response.json()) as UserMemory;
-        if (requestId !== memoryWriteGenerationRef.current) {
+        if (isGuardedMemoryWriteStale(requestId, userId)) {
           return;
         }
         setSession((prev) => {
@@ -966,6 +1004,8 @@ export function App() {
     // session 快照——那个快照可能比后来的乐观更新还旧。所以下面全程只用函数式
     // setSession(prev => ...)，从不 spread 闭包捕获的 session。失败回滚会调用
     // refreshMemoryForCurrentUser，它内部也会用同一个计数器做过期检查（见该函数定义处）。
+    // 同样，await 期间也可能发生退出登录/切换账号，哪怕世代没变也不能把响应写进当前
+    // 会话——isGuardedMemoryWriteStale 会一并校验这两种情况。
     const requestId = ++memoryWriteGenerationRef.current;
     const userId = session.user.id;
     const token = session.token;
@@ -1011,9 +1051,10 @@ export function App() {
         throw new Error(`completion_failed_${response.status}`);
       }
       const memory = (await response.json()) as UserMemory;
-      if (requestId !== memoryWriteGenerationRef.current) {
-        // 期间已经又发起了更新的打勾请求，那次请求自己的乐观状态/响应更能代表当前
-        // 状态，这里就不要用这份过期响应去覆盖它了。
+      if (isGuardedMemoryWriteStale(requestId, userId)) {
+        // 期间已经又发起了更新的打勾请求（那次请求自己的乐观状态/响应更能代表当前
+        // 状态），或者当前会话已经不属于发起请求时的那个用户了——这里就不要用这份
+        // 过期/错位响应去覆盖它了。
         return;
       }
       setSession((prev) => {
@@ -1025,7 +1066,7 @@ export function App() {
         return nextSession;
       });
     } catch {
-      if (requestId !== memoryWriteGenerationRef.current) {
+      if (isGuardedMemoryWriteStale(requestId, userId)) {
         return;
       }
       // 不用捕获的快照回滚（可能已经过期），改为向服务端重新拉取权威状态。
