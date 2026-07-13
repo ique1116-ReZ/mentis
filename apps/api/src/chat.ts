@@ -364,7 +364,7 @@ function sanitizeActionId(content: string): string {
   return content.replace(/[^a-zA-Z0-9_-]/g, "").trim().slice(0, 80);
 }
 
-function normalizeActionType(value: string): RehabActionType | undefined {
+export function normalizeActionType(value: string): RehabActionType | undefined {
   const normalized = value.trim().toLowerCase();
   if (
     normalized === "stretch" ||
@@ -399,7 +399,7 @@ function sanitizeOptionText(content: string): string {
   return content.replace(/\s+/g, " ").trim().slice(0, 80);
 }
 
-function formatActionLibraryContext(
+export function formatActionLibraryContext(
   actions: ActionLibraryItem[],
   messages: ChatMessage[],
   category?: RehabConsultCategory,

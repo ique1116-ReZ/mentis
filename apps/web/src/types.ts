@@ -1,3 +1,5 @@
+import type { RehabActionType } from "@mentis/domain";
+
 export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
@@ -25,7 +27,7 @@ export type ChatRecommendedAction = {
   progressionCriteria: string[];
   tags: string[];
   reason?: string;
-  actionType?: "stretch" | "strength" | "activation" | "mobility" | "balance";
+  actionType?: RehabActionType;
   targetMuscles?: string[];
 };
 
