@@ -24,6 +24,26 @@ describe("MessageBubble", () => {
     expect(html).toContain("如果没有合适选项，可以自己补充");
   });
 
+  it("disables options and supplemental input after the prompt was answered", () => {
+    render(
+      <MessageBubble
+        message={{
+          role: "assistant",
+          content: "需要确认疼痛位置。",
+          options: [
+            { id: "outside", label: "膝盖外侧", value: "膝盖外侧" },
+            { id: "below", label: "膝盖下方", value: "膝盖下方" },
+          ],
+        }}
+        optionsDisabled
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "膝盖外侧" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "膝盖下方" })).toHaveProperty("disabled", true);
+    expect(screen.getByPlaceholderText("如果没有合适选项，可以自己补充")).toHaveProperty("disabled", true);
+  });
+
   it("renders recommended rehab actions as compact cards without exercise details", () => {
     const html = renderToStaticMarkup(
       <MessageBubble

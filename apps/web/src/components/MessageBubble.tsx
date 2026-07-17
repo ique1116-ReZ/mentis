@@ -6,6 +6,7 @@ import type { ChatMessage, ChatOption, ChatRecommendedAction } from "../types";
 export function MessageBubble({
   disabled = false,
   message,
+  optionsDisabled = false,
   onAddRecommendedActions,
   isActionInPlan,
   onSelectOption,
@@ -13,6 +14,7 @@ export function MessageBubble({
 }: {
   disabled?: boolean;
   message: ChatMessage;
+  optionsDisabled?: boolean;
   onAddRecommendedActions?: (actions: ChatRecommendedAction[]) => void;
   isActionInPlan?: (action: ChatRecommendedAction) => boolean;
   onSelectOption?: (option: ChatOption) => void;
@@ -24,6 +26,7 @@ export function MessageBubble({
   const options = isAssistant && Array.isArray(message.options) ? message.options : [];
   const recommendedActions = isAssistant && Array.isArray(message.recommendedActions) ? message.recommendedActions : [];
   const canSupplement = options.length > 0;
+  const areOptionsDisabled = disabled || optionsDisabled;
   return (
     <article className={isAssistant ? "message assistant" : "message user"}>
       {isAssistant ? <AiAvatar /> : null}
@@ -37,7 +40,7 @@ export function MessageBubble({
             {options.map((option) => (
               <button
                 className="message-option"
-                disabled={disabled}
+                disabled={areOptionsDisabled}
                 key={option.id}
                 onClick={() => onSelectOption?.(option)}
                 type="button"
@@ -84,7 +87,7 @@ export function MessageBubble({
             onSubmit={(event) => {
               event.preventDefault();
               const content = supplement.trim();
-              if (!content || disabled) {
+              if (!content || areOptionsDisabled) {
                 return;
               }
               onSubmitSupplement?.(content);
@@ -94,13 +97,13 @@ export function MessageBubble({
             <label htmlFor={supplementId}>补充描述</label>
             <div className="message-supplement-row">
               <input
-                disabled={disabled}
+                disabled={areOptionsDisabled}
                 id={supplementId}
                 onChange={(event) => setSupplement(event.target.value)}
                 placeholder="如果没有合适选项，可以自己补充"
                 value={supplement}
               />
-              <button disabled={disabled || !supplement.trim()} type="submit">
+              <button disabled={areOptionsDisabled || !supplement.trim()} type="submit">
                 发送
               </button>
             </div>

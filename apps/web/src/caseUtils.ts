@@ -69,6 +69,14 @@ export function shouldShowCaseSummary(title: string, summary: string) {
   return Boolean(summary.trim()) && title.trim() !== summary.trim();
 }
 
+export function isChatPromptAnswered(messages: ChatMessage[], messageIndex: number) {
+  const message = messages[messageIndex];
+  if (message?.role !== "assistant" || !message.options?.length) {
+    return false;
+  }
+  return messages.slice(messageIndex + 1).some((candidate) => candidate.role === "user");
+}
+
 export function truncateText(content: string, maxLength: number) {
   const normalized = content.replace(/\s+/g, " ").trim();
   if (normalized.length <= maxLength) {

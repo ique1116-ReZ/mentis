@@ -9,6 +9,7 @@ import {
   canDeleteCase,
   displayTrainingPlans,
   hydrateCasesFromMemory,
+  isChatPromptAnswered,
   isComplaintPending,
   isCompletePlanPatch,
   makeComplaintSummary,
@@ -1209,6 +1210,7 @@ export function App() {
                     disabled={isSending}
                     key={`${message.role}-${index}`}
                     message={message}
+                    optionsDisabled={isChatPromptAnswered(messages, index)}
                     onAddRecommendedActions={addRecommendedActionsToPlan}
                     isActionInPlan={isActionInActivePlan}
                     onSelectOption={(option) => sendMessage(option.value || option.label)}

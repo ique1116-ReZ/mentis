@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeFetchedMessages, shouldShowCaseSummary } from "./caseUtils";
+import { isChatPromptAnswered, mergeFetchedMessages, shouldShowCaseSummary } from "./caseUtils";
 import type { ChatMessage } from "./types";
 
 const userMessage = (content: string): ChatMessage => ({ role: "user", content });
@@ -39,5 +39,21 @@ describe("shouldShowCaseSummary", () => {
 
   it("keeps an additional non-empty summary", () => {
     expect(shouldShowCaseSummary("跑步后膝盖疼", "下楼时更明显，已持续两天")).toBe(true);
+  });
+});
+
+describe("isChatPromptAnswered", () => {
+  const prompt: ChatMessage = {
+    role: "assistant",
+    content: "需要确认疼痛位置。",
+    options: [{ id: "outside", label: "膝盖外侧", value: "膝盖外侧" }],
+  };
+
+  it("locks an option prompt after the user has replied", () => {
+    expect(isChatPromptAnswered([prompt, userMessage("膝盖外侧"), assistantMessage("收到")], 0)).toBe(true);
+  });
+
+  it("keeps the latest unanswered option prompt active", () => {
+    expect(isChatPromptAnswered([assistantMessage("收到"), prompt], 1)).toBe(false);
   });
 });
