@@ -65,6 +65,10 @@ export function makeComplaintSummary(content: string) {
   return truncateText(content, 34);
 }
 
+export function shouldShowCaseSummary(title: string, summary: string) {
+  return Boolean(summary.trim()) && title.trim() !== summary.trim();
+}
+
 export function truncateText(content: string, maxLength: number) {
   const normalized = content.replace(/\s+/g, " ").trim();
   if (normalized.length <= maxLength) {

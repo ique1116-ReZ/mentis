@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeFetchedMessages } from "./caseUtils";
+import { mergeFetchedMessages, shouldShowCaseSummary } from "./caseUtils";
 import type { ChatMessage } from "./types";
 
 const userMessage = (content: string): ChatMessage => ({ role: "user", content });
@@ -29,5 +29,15 @@ describe("mergeFetchedMessages", () => {
     const fetched = [assistantMessage("欢迎（服务端版本）")];
 
     expect(mergeFetchedMessages(local, fetched)).toBe(fetched);
+  });
+});
+
+describe("shouldShowCaseSummary", () => {
+  it("hides a summary that duplicates the case title", () => {
+    expect(shouldShowCaseSummary("跑步后疼，怀疑是ITB综合症", "跑步后疼，怀疑是ITB综合症")).toBe(false);
+  });
+
+  it("keeps an additional non-empty summary", () => {
+    expect(shouldShowCaseSummary("跑步后膝盖疼", "下楼时更明显，已持续两天")).toBe(true);
   });
 });

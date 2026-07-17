@@ -15,6 +15,7 @@ import {
   makeComplaintTitle,
   mergeFetchedMessages,
   mergePlanGoals,
+  shouldShowCaseSummary,
   trainingPlanToCasePlan,
 } from "./caseUtils";
 import { AdminDashboard } from "./AdminDashboard";
@@ -1140,7 +1141,7 @@ export function App() {
                 <div>
                   <span className="case-tag">{selectedCategory.label}</span>
                   <strong>{activeCase.title}</strong>
-                  <span>{activeCase.summary}</span>
+                  {shouldShowCaseSummary(activeCase.title, activeCase.summary) ? <span>{activeCase.summary}</span> : null}
                   <small>{activeCase.createdAt} · {activeCase.status}</small>
                 </div>
               </div>
